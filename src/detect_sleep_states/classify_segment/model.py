@@ -12,12 +12,14 @@ class ClassifySegmentModel(lightning.LightningModule):
         self,
         learning_rate,
         model: torch.nn.Module,
-        hyperparams: Dict
+        hyperparams: Dict,
+        batch_size: int
     ):
         super().__init__()
         num_classes = len(label_id_str_map)
         self._loss_function = torch.nn.CrossEntropyLoss()
         self.model = model
+        self._batch_size = batch_size
 
         self.val_precision = torchmetrics.classification.MulticlassPrecision(
             num_classes=num_classes)
@@ -40,7 +42,8 @@ class ClassifySegmentModel(lightning.LightningModule):
         preds = torch.argmax(logits, dim=1)
 
         self.train_f1.update(preds, target)
-        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_loss", loss, prog_bar=True,
+                 batch_size=self._batch_size)
         self.logger.log_metrics({
             'train_loss': loss,
         }, step=self.global_step)
@@ -50,7 +53,8 @@ class ClassifySegmentModel(lightning.LightningModule):
         data, target = batch
         logits = self.model(data['sequence'])
         loss = self._loss_function(logits, target)
-        self.log('val_loss', loss, on_epoch=True, prog_bar=True)
+        self.log('val_loss', loss, on_epoch=True, prog_bar=True,
+                 batch_size=self._batch_size)
 
         preds = torch.argmax(logits, dim=1)
         self.val_precision.update(preds=preds, target=target)
@@ -73,18 +77,17 @@ class ClassifySegmentModel(lightning.LightningModule):
         self.logger.log_hyperparams(params=self._hyperparams)
 
     def on_train_epoch_end(self) -> None:
-        self.logger.log_metrics({
-            'train_f1': self.train_f1.compute().item()
-        }, step=self.current_epoch)
+        self.log('train_f1', self.train_f1.compute().item(),
+                 on_epoch=True, batch_size=self._batch_size)
         self.train_f1.reset()
 
     def on_validation_epoch_end(self) -> None:
-        self.log('val_f1', self.val_f1.compute().item(), on_epoch=True)
-        self.logger.log_metrics({
-            'val_f1': self.val_f1.compute().item(),
-            'val_precision': self.val_precision.compute().item(),
-            'val_recall': self.val_recall.compute().item()
-        }, step=self.current_epoch)
+        self.log('val_f1', self.val_f1.compute().item(), on_epoch=True,
+                 batch_size=self._batch_size)
+        self.log('val_precision', self.val_precision.compute().item(),
+                 on_epoch=True, batch_size=self._batch_size)
+        self.log('val_recall', self.val_recall.compute().item(),
+                 on_epoch=True, batch_size=self._batch_size)
         self.val_f1.reset()
         self.val_precision.reset()
         self.val_recall.reset()
