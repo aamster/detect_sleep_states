@@ -99,7 +99,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             data['anglez'],
             data['enmo'],
             data['timestamp'].apply(lambda x: x.hour)
-        ])
+        ]).T
 
         data = self._transform(image=data)['image']
 
