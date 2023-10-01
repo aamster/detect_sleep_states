@@ -81,7 +81,7 @@ class SleepDataModule(lightning.LightningDataModule):
                     getattr(row, 'label', None) is None):
                 starts = np.arange(
                     row.start,
-                    row.end,
+                    row.end - self._sequence_length,
                     self._sequence_length)
                 for start in starts:
                     datum = {
@@ -89,7 +89,7 @@ class SleepDataModule(lightning.LightningDataModule):
                         'start': start,
                         'end': start + self._sequence_length
                     }
-                    if getattr(row, 'label') is not None:
+                    if getattr(row, 'label', None) is not None:
                         if datum['end'] > row.end:
                             if row.label == Label.sleep.name:
                                 label = Label.wakeup.name
