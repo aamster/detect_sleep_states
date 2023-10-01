@@ -61,8 +61,7 @@ class SleepDataModule(lightning.LightningDataModule):
                 sequence_length=self._sequence_length,
                 is_train=True,
                 transform=self._train_transform,
-                limit_to_series_ids=(
-                    train_series_ids if self._is_debug else None)
+                limit_to_series_ids=train_series_ids
             )
 
             self._val = ClassifySegmentDataset(
@@ -71,8 +70,7 @@ class SleepDataModule(lightning.LightningDataModule):
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
-                limit_to_series_ids=(
-                    val_series_ids if self._is_debug else None)
+                limit_to_series_ids=val_series_ids
             )
 
     def _get_test_set(self, meta: pd.DataFrame):

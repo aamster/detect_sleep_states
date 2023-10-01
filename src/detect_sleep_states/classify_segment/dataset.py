@@ -44,7 +44,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         :param is_train:
         :param transform:
         :param limit_to_series_ids
-            Use for testing
+            Limit to loading these series ids
         """
         super().__init__()
 
