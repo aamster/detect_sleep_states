@@ -103,6 +103,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
         data = self._transform(image=data)['image']
 
+        data = data.squeeze()
+
         data = {
             'sequence': data,
             'start': start,
