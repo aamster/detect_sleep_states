@@ -1,0 +1,31 @@
+# -----------------------------------------------------------------------------
+##  Build System Configurations
+#   https://setuptools.pypa.io/en/latest/setuptools.html#building-and-distributing-packages-with-setuptools
+# -----------------------------------------------------------------------------
+
+[build-system]
+requires = ["setuptools>=59", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "sleep_detection"
+description = "Sleep detection"
+dynamic = [ "version"]
+requires-python = ">=3.8"
+
+dependencies = [
+    "pandas",
+    "numpy",
+    "lightning",
+    "torchvision",
+    "torchmetrics",
+    "torch",
+    "pyarrow",
+    "albumentations"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
