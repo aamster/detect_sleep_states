@@ -87,7 +87,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             start = row['start']
 
         label = int(getattr(Label, row['label']) in (
-            Label.onset.name, Label.onset.name)) \
+            Label.onset.name, Label.wakeup.name)) \
             if 'label' in row else None
 
         series_data = self._series.loc[row.name]

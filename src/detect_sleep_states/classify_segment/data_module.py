@@ -91,9 +91,12 @@ class SleepDataModule(lightning.LightningDataModule):
                     }
                     if getattr(row, 'label', None) is not None:
                         if datum['end'] > row.end:
-                            label = 1
+                            if row.label == Label.sleep.name:
+                                label = Label.wakeup.name
+                            else:
+                                label = Label.onset.name
                         else:
-                            label = 0
+                            label = row.label
                         datum['label'] = label
                     if getattr(row, 'night', None) is not None:
                         datum['night'] = row.night
