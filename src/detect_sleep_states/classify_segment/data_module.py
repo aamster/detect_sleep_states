@@ -76,12 +76,19 @@ class SleepDataModule(lightning.LightningDataModule):
     def _get_test_set(self, meta: pd.DataFrame):
         data = []
         for row in meta.itertuples(index=True):
+            if 'night' in meta:
+                last_night = meta.loc[row.Index]['night'].max()
+            else:
+                last_night = None
+
             if (getattr(row, 'label', None) is not None and
                     row.label in (Label.sleep.name, Label.awake.name) or
                     getattr(row, 'label', None) is None):
+                end = row.end - self._sequence_length \
+                    if getattr(row, 'night', -1) == last_night else row.end
                 starts = np.arange(
                     row.start,
-                    row.end - self._sequence_length,
+                    end,
                     self._sequence_length)
                 for start in starts:
                     datum = {
