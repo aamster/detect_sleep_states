@@ -95,11 +95,11 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         data['timestamp'] = data['timestamp'].apply(
             lambda x: datetime.datetime.strptime(x, '%Y-%m-%dT%H:%M:%S%z'))
 
-        data = np.vstack([
+        data = np.stack([
             data['anglez'],
             data['enmo'],
             data['timestamp'].apply(lambda x: x.hour)
-        ]).T
+        ])
 
         data = self._transform(image=data)['image']
 
