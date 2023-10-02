@@ -86,7 +86,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         else:
             start = row['start']
 
-        label = getattr(Label, row['label']).value \
+        label = int(getattr(Label, row['label']) in (
+            Label.onset.name, Label.onset.name)) \
             if 'label' in row else None
 
         series_data = self._series.loc[row.name]
@@ -97,8 +98,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
         data = np.stack([
             data['anglez'],
-            data['enmo'],
-            data['timestamp'].apply(lambda x: x.hour)
+            data['enmo']
+            # data['timestamp'].apply(lambda x: x.hour)
         ])
 
         data = self._transform(image=data)['image']
