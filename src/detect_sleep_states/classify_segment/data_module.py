@@ -53,12 +53,16 @@ class SleepDataModule(lightning.LightningDataModule):
             train_series_ids = series_ids[train_idxs]
             val_series_ids = series_ids[val_idxs]
             if self._is_debug:
+                train_series_id = pd.Series(meta.index).sample(1)
+                meta = meta.loc[train_series_id]
+
                 meta = pd.concat([
-                    meta[meta['label'] == 'sleep'].sample(1),
-                    meta[meta['label'] == 'awake'].sample(1)
+                    meta.loc[(meta['night'] != meta['night'].max()) & (meta['label'] == 'sleep')].sample(1),
+                    meta.loc[(meta['night'] != meta['night'].max()) & (
+                                meta['label'] == 'awake')].sample(1),
                 ])
-                train_series_ids = meta.index.unique()
                 train = self._get_test_set(meta=meta)
+                train_series_ids = train.index.unique()
             else:
                 train = meta.loc[train_series_ids]
             self._train = ClassifySegmentDataset(
@@ -91,7 +95,7 @@ class SleepDataModule(lightning.LightningDataModule):
                     row.label in (Label.sleep.name, Label.awake.name)):
                 # limit the end to not go beyond the sequence
                 end = row.end - self._sequence_length \
-                    if row.night == last_night else row.end
+                    if row.night == last_night and not self._is_debug else row.end
             elif getattr(row, 'label', None) is None:
                 end = row.end
             else:
