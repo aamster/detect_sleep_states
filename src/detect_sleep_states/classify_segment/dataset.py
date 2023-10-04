@@ -86,9 +86,15 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         else:
             start = row['start']
 
-        label = int(getattr(Label, row['label']) in (
-            Label.onset.name, Label.wakeup.name)) \
-            if 'label' in row else None
+        if 'label' in row:
+            if row['label'] in (Label.awake.name, Label.sleep.name):
+                label = 0
+            elif row['label'] == Label.onset.name:
+                label = 1
+            else:
+                label = 2
+        else:
+            label = None
 
         series_data = self._series.loc[row.name]
         data = series_data.iloc[start:start+self._sequence_length].copy()
@@ -99,7 +105,6 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         data = np.stack([
             data['anglez'],
             data['enmo']
-            # data['timestamp'].apply(lambda x: x.hour)
         ])
 
         data = self._transform(image=data)['image']

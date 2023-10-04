@@ -45,7 +45,7 @@ class SleepDataModule(lightning.LightningDataModule):
             meta = meta.set_index('series_id')
             series_ids = meta.index.unique()
             idxs = np.arange(len(series_ids))
-            rng = np.random.default_rng(1234)
+            rng = np.random.default_rng(12345)
             rng.shuffle(idxs)
             train_idxs = idxs[:int(len(idxs) * .7)]
             val_idxs = idxs[int(len(idxs) * .7):]
@@ -53,13 +53,19 @@ class SleepDataModule(lightning.LightningDataModule):
             train_series_ids = series_ids[train_idxs]
             val_series_ids = series_ids[val_idxs]
             if self._is_debug:
-                train_series_ids = [train_series_ids[0]]
-                val_series_ids = [val_series_ids[0]]
+                meta = pd.concat([
+                    meta[meta['label'] == 'sleep'].sample(1),
+                    meta[meta['label'] == 'awake'].sample(1)
+                ])
+                train_series_ids = meta.index.unique()
+                train = self._get_test_set(meta=meta)
+            else:
+                train = meta.loc[train_series_ids]
             self._train = ClassifySegmentDataset(
                 data_path=self._data_path,
-                meta=meta.loc[train_series_ids],
+                meta=train,
                 sequence_length=self._sequence_length,
-                is_train=True,
+                is_train=False if self._is_debug else True,
                 transform=self._train_transform,
                 limit_to_series_ids=train_series_ids
             )
@@ -70,46 +76,60 @@ class SleepDataModule(lightning.LightningDataModule):
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
-                limit_to_series_ids=val_series_ids
-            )
+                limit_to_series_ids=val_series_ids,
+            ) if not self._is_debug else None
 
     def _get_test_set(self, meta: pd.DataFrame):
         data = []
         for row in meta.itertuples(index=True):
             if 'night' in meta:
                 last_night = meta.loc[row.Index]['night'].max()
+                n_nights = pd.Series(meta.loc[row.Index]['night']).nunique()
             else:
                 last_night = None
+                n_nights = None
 
             if (getattr(row, 'label', None) is not None and
-                    row.label in (Label.sleep.name, Label.awake.name) or
-                    getattr(row, 'label', None) is None):
+                    row.label in (Label.sleep.name, Label.awake.name)):
+                # limit the end to not go beyond the sequence
                 end = row.end - self._sequence_length \
-                    if getattr(row, 'night', -1) == last_night else row.end
-                starts = np.arange(
-                    row.start,
-                    end,
-                    self._sequence_length)
-                for start in starts:
-                    datum = {
-                        'series_id': row.Index,
-                        'start': start,
-                        'end': start + self._sequence_length
-                    }
-                    if getattr(row, 'label', None) is not None:
-                        if datum['end'] > row.end:
-                            if row.label == Label.sleep.name:
-                                label = Label.wakeup.name
-                            else:
-                                label = Label.onset.name
+                    if row.night == last_night and n_nights > 1 else row.end
+            elif getattr(row, 'label', None) is None:
+                end = row.end
+            else:
+                continue
+            starts = np.arange(
+                row.start,
+                end,
+                self._sequence_length)
+            for start in starts:
+                datum = {
+                    'series_id': row.Index,
+                    'start': start,
+                    'end': start + self._sequence_length
+                }
+                if getattr(row, 'label', None) is not None:
+                    if datum['end'] > row.end:
+                        if row.label == Label.sleep.name:
+                            label = Label.wakeup.name
                         else:
-                            label = row.label
-                        datum['label'] = label
-                    if getattr(row, 'night', None) is not None:
-                        datum['night'] = row.night
-                    data.append(datum)
+                            label = Label.onset.name
+                    else:
+                        label = row.label
+                    datum['label'] = label
+                if getattr(row, 'night', None) is not None:
+                    datum['night'] = row.night
+                data.append(datum)
         data = pd.DataFrame(data)
         data = data.set_index('series_id')
+
+        if self._is_debug and 'label' in data:
+            data = pd.concat([
+                data[data['label'] == 'sleep'].sample(1),
+                data[data['label'] == 'awake'].sample(1),
+                data[data['label'] == 'onset'].sample(1),
+                data[data['label'] == 'wakeup'].sample(1)
+            ])
         return data
 
     def train_dataloader(self):
