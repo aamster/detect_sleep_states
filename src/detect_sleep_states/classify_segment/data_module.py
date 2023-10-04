@@ -84,16 +84,14 @@ class SleepDataModule(lightning.LightningDataModule):
         for row in meta.itertuples(index=True):
             if 'night' in meta:
                 last_night = meta.loc[row.Index]['night'].max()
-                n_nights = pd.Series(meta.loc[row.Index]['night']).nunique()
             else:
                 last_night = None
-                n_nights = None
 
             if (getattr(row, 'label', None) is not None and
                     row.label in (Label.sleep.name, Label.awake.name)):
                 # limit the end to not go beyond the sequence
                 end = row.end - self._sequence_length \
-                    if row.night == last_night and n_nights > 1 else row.end
+                    if row.night == last_night else row.end
             elif getattr(row, 'label', None) is None:
                 end = row.end
             else:
