@@ -16,10 +16,9 @@ class Label(Enum):
 
 
 label_id_str_map = {
-    0: 'sleep',
-    1: 'awake',
-    2: 'onset',
-    3: 'wakeup'
+    0: 'sleep_or_awake',
+    1: 'onset',
+    2: 'wakeup'
 }
 
 
