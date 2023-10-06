@@ -68,7 +68,7 @@ class ClassifySegmentModel(lightning.LightningModule):
             dataloader_idx: int = 0
     ):
         data, target = batch
-        logits = self.model(data)
+        logits = self.model(data['sequence'])
         preds = torch.argmax(logits, dim=1)
 
         return [label_id_str_map[pred.item()] for pred in preds]
