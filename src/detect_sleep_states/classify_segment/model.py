@@ -51,7 +51,7 @@ class ClassifySegmentModel(lightning.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         data, target = batch
-        logits = self.model(data['sequence'])
+        logits = self.model(data['sequence'], start_hour=data['start_hour'])
         loss = self._loss_function(logits, target)
         self.log('val_loss', loss, on_epoch=True, prog_bar=True,
                  batch_size=self._batch_size)
