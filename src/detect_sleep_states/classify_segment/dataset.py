@@ -16,9 +16,10 @@ class Label(Enum):
 
 
 label_id_str_map = {
-    0: 'sleep_or_awake',
-    1: 'onset',
-    2: 'wakeup'
+    0: 'sleep',
+    1: 'awake',
+    2: 'onset',
+    3: 'wakeup'
 }
 
 
@@ -86,12 +87,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             start = row['start']
 
         if 'label' in row:
-            if row['label'] in (Label.awake.name, Label.sleep.name):
-                label = 0
-            elif row['label'] == Label.onset.name:
-                label = 1
-            else:
-                label = 2
+            label = getattr(Label, row['label']).value
         else:
             label = None
 
@@ -100,6 +96,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
         data['timestamp'] = data['timestamp'].apply(
             lambda x: datetime.datetime.strptime(x, '%Y-%m-%dT%H:%M:%S%z'))
+
+        start_hour = data['timestamp'].dt.hour[0]
 
         data = np.stack([
             data['anglez'],
@@ -114,7 +112,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             'sequence': data,
             'start': start,
             'end': start + self._sequence_length,
-            'series_id': row.name
+            'series_id': row.name,
+            'start_hour': start_hour
         }
 
         return data, label

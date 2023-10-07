@@ -37,7 +37,7 @@ class ClassifySegmentModel(lightning.LightningModule):
 
     def training_step(self, batch, batch_idx):
         data, target = batch
-        logits = self.model(data['sequence'])
+        logits = self.model(x=data['sequence'], start_hour=data['start_hour'])
         loss = self._loss_function(logits, target)
         preds = torch.argmax(logits, dim=1)
 
