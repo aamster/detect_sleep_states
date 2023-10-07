@@ -97,7 +97,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         data['timestamp'] = data['timestamp'].apply(
             lambda x: datetime.datetime.strptime(x, '%Y-%m-%dT%H:%M:%S%z'))
 
-        start_hour = data['timestamp'].dt.hour[0]
+        start_hour = data['timestamp'].iloc[0].hour
 
         data = np.stack([
             data['anglez'],
