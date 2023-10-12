@@ -28,7 +28,7 @@ class SleepDataModule(lightning.LightningDataModule):
         meta = pd.read_csv(meta_path)
 
         meta = meta[meta.apply(lambda x: is_valid_sequence(
-            seq_meta=x, sequence_length=self._sequence_length), axis=1)]
+            seq_meta=x, sequence_length=sequence_length), axis=1)]
 
         self._meta = meta.set_index('series_id')
         self._series_ids = meta.index.unique()
