@@ -24,12 +24,21 @@ class SleepDataModule(lightning.LightningDataModule):
         is_debug: bool = False
     ):
         super().__init__()
+
+        meta = pd.read_csv(meta_path)
+
+        meta = meta[meta.apply(lambda x: is_valid_sequence(
+            seq_meta=x, sequence_length=self._sequence_length), axis=1)]
+
+        self._meta = meta.set_index('series_id')
+        self._series_ids = meta.index.unique()
         self._batch_size = batch_size
         self._num_workers = num_workers
         self._meta_path = meta_path
         self._data_path = data_path
         self._train = None
         self._val = None
+        self._predict = None
         self._sequence_length = sequence_length
         self._train_transform = train_transform
         self._inference_transform = inference_transform
@@ -37,34 +46,27 @@ class SleepDataModule(lightning.LightningDataModule):
 
     def setup(self, stage: str) -> None:
         if stage == 'fit':
-            meta = pd.read_csv(self._meta_path)
-
-            meta = meta[meta.apply(lambda x: is_valid_sequence(
-                seq_meta=x, sequence_length=self._sequence_length), axis=1)]
-
-            meta = meta.set_index('series_id')
-            series_ids = meta.index.unique()
-            idxs = np.arange(len(series_ids))
+            idxs = np.arange(len(self._series_ids))
             rng = np.random.default_rng(12345)
             rng.shuffle(idxs)
             train_idxs = idxs[:int(len(idxs) * .7)]
             val_idxs = idxs[int(len(idxs) * .7):]
 
-            train_series_ids = series_ids[train_idxs]
-            val_series_ids = series_ids[val_idxs]
+            train_series_ids = self._series_ids[train_idxs]
+            val_series_ids = self._series_ids[val_idxs]
             if self._is_debug:
-                train_series_id = pd.Series(meta.index).sample(1)
-                meta = meta.loc[train_series_id]
+                train_series_id = pd.Series(self._meta.index).sample(1)
+                meta = self._meta.loc[train_series_id]
 
                 meta = pd.concat([
                     meta.loc[(meta['night'] != meta['night'].max()) & (meta['label'] == 'sleep')].sample(1),
                     meta.loc[(meta['night'] != meta['night'].max()) & (
                                 meta['label'] == 'awake')].sample(1),
                 ])
-                train = self._get_test_set(meta=meta)
+                train = self.get_test_set(meta=meta)
                 train_series_ids = train.index.unique()
             else:
-                train = meta.loc[train_series_ids]
+                train = self._meta.loc[train_series_ids]
             self._train = ClassifySegmentDataset(
                 data_path=self._data_path,
                 meta=train,
@@ -76,14 +78,23 @@ class SleepDataModule(lightning.LightningDataModule):
 
             self._val = ClassifySegmentDataset(
                 data_path=self._data_path,
-                meta=self._get_test_set(meta=meta.loc[val_series_ids]),
+                meta=self.get_test_set(meta=self._meta.loc[val_series_ids]),
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
                 limit_to_series_ids=val_series_ids,
             ) if not self._is_debug else None
+        elif stage == 'predict':
+            self._predict = ClassifySegmentDataset(
+                data_path=self._data_path,
+                meta=self.get_test_set(meta=self._meta),
+                sequence_length=self._sequence_length,
+                is_train=False,
+                transform=self._inference_transform,
+                limit_to_series_ids=self._series_ids
+            )
 
-    def _get_test_set(self, meta: pd.DataFrame):
+    def get_test_set(self, meta: pd.DataFrame):
         data = []
         for row in meta.itertuples(index=True):
             if 'night' in meta:
@@ -152,7 +163,7 @@ class SleepDataModule(lightning.LightningDataModule):
 
     def predict_dataloader(self):
         return DataLoader(
-            self._val,
+            self._predict,
             batch_size=self._batch_size,
             num_workers=self._num_workers,
             shuffle=False
