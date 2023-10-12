@@ -31,7 +31,7 @@ class SleepDataModule(lightning.LightningDataModule):
             seq_meta=x, sequence_length=sequence_length), axis=1)]
 
         self._meta = meta.set_index('series_id')
-        self._series_ids = meta.index.unique()
+        self._series_ids = self._meta.index.unique()
         self._batch_size = batch_size
         self._num_workers = num_workers
         self._meta_path = meta_path
