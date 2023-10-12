@@ -1,13 +1,70 @@
 from typing import Dict, Any
 
 import lightning
+import pytorch_lightning
 import torch
 import torchmetrics
+from torch import nn
+from torchvision.ops.misc import ConvNormActivation
 
 from detect_sleep_states.classify_segment.dataset import label_id_str_map
 
 
-class ClassifySegmentModel(lightning.LightningModule):
+class DetectSleepModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.conv = nn.Sequential(
+            ConvNormActivation(
+                in_channels=2,
+                out_channels=64,
+                kernel_size=50,
+                bias=False,
+                norm_layer=nn.BatchNorm1d,
+                conv_layer=nn.Conv1d,
+                stride=1
+            ),
+            nn.MaxPool1d(kernel_size=3, stride=2),
+            ConvNormActivation(
+                in_channels=64,
+                out_channels=128,
+                kernel_size=50,
+                bias=False,
+                norm_layer=nn.BatchNorm1d,
+                conv_layer=nn.Conv1d,
+                stride=1
+            ),
+            nn.MaxPool1d(kernel_size=3, stride=2),
+            ConvNormActivation(
+                in_channels=128,
+                out_channels=256,
+                kernel_size=50,
+                bias=False,
+                norm_layer=nn.BatchNorm1d,
+                conv_layer=nn.Conv1d,
+                stride=1
+            ),
+            nn.MaxPool1d(kernel_size=3, stride=2),
+            nn.AdaptiveAvgPool1d(output_size=1),
+            nn.Flatten(start_dim=1)
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(256 + 24, len(label_id_str_map), bias=True)
+        )
+
+    def forward(self, x, start_hour):
+        x = self.conv(x)
+
+        start_hour = nn.functional.one_hot(start_hour.long(), num_classes=24)
+
+        x = torch.cat([x, start_hour], 1)
+        x = self.fc(x)
+
+        return x
+
+
+class ClassifySegmentModel(pytorch_lightning.LightningModule):
     def __init__(
         self,
         learning_rate,
@@ -70,8 +127,12 @@ class ClassifySegmentModel(lightning.LightningModule):
         data, target = batch
         logits = self.model(data['sequence'], start_hour=data['start_hour'])
         preds = torch.argmax(logits, dim=1)
-
-        return [label_id_str_map[pred.item()] for pred in preds]
+        scores = torch.nn.functional.softmax(logits, dim=1)
+        res = [{
+            'pred': label_id_str_map[preds[i].item()],
+            'score': scores[i][preds[i]].item()
+        } for i in range(len(preds))]
+        return res
 
     def on_train_start(self) -> None:
         self.logger.log_hyperparams(params=self._hyperparams)
