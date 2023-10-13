@@ -87,7 +87,7 @@ class SleepDataModule(lightning.LightningDataModule):
         elif stage == 'predict':
             self._predict = ClassifySegmentDataset(
                 data_path=self._data_path,
-                meta=self.get_test_set(meta=self._meta),
+                meta=self._meta,
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
