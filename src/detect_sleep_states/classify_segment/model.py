@@ -130,7 +130,9 @@ class ClassifySegmentModel(pytorch_lightning.LightningModule):
         scores = torch.nn.functional.softmax(logits, dim=1)
         res = [{
             'pred': label_id_str_map[preds[i].item()],
-            'score': scores[i][preds[i]].item()
+            'score': scores[i][preds[i]].item(),
+            'start': data['start'][i].item(),
+            'end': data['end'][i].item()
         } for i in range(len(preds))]
         return res
 
