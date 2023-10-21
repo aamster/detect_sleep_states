@@ -16,16 +16,15 @@ class SleepDataModule(lightning.LightningDataModule):
         self,
         batch_size: int,
         num_workers: int,
-        meta_path: Path,
+        meta: pd.DataFrame,
         data_path: Path,
         sequence_length: int = 720,
         train_transform: Optional[transforms.Compose] = None,
         inference_transform: Optional[transforms.Compose] = None,
-        is_debug: bool = False
+        is_debug: bool = False,
+        load_series: bool = True
     ):
         super().__init__()
-
-        meta = pd.read_csv(meta_path)
 
         meta = meta[meta.apply(lambda x: is_valid_sequence(
             seq_meta=x, sequence_length=sequence_length), axis=1)]
@@ -34,7 +33,6 @@ class SleepDataModule(lightning.LightningDataModule):
         self._series_ids = self._meta.index.unique()
         self._batch_size = batch_size
         self._num_workers = num_workers
-        self._meta_path = meta_path
         self._data_path = data_path
         self._train = None
         self._val = None
@@ -43,6 +41,7 @@ class SleepDataModule(lightning.LightningDataModule):
         self._train_transform = train_transform
         self._inference_transform = inference_transform
         self._is_debug = is_debug
+        self._load_series = load_series
 
     def setup(self, stage: str) -> None:
         if stage == 'fit':
@@ -91,7 +90,8 @@ class SleepDataModule(lightning.LightningDataModule):
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
-                limit_to_series_ids=self._series_ids
+                limit_to_series_ids=self._series_ids,
+                load_series=self._load_series
             )
 
     def get_test_set(self, meta: pd.DataFrame):
@@ -168,3 +168,7 @@ class SleepDataModule(lightning.LightningDataModule):
             num_workers=self._num_workers,
             shuffle=False
         )
+
+    @property
+    def predict(self) -> ClassifySegmentDataset:
+        return self._predict

@@ -31,7 +31,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         transform,
         sequence_length: int = 720,
         is_train: bool = True,
-        limit_to_series_ids: Optional[List] = None
+        limit_to_series_ids: Optional[List] = None,
+        load_series: bool = True
     ):
         """
 
@@ -45,13 +46,19 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         :param transform:
         :param limit_to_series_ids
             Limit to loading these series ids
+        :param load_series
+            Whether to load series. It takes a while, skip if not needed
         """
         super().__init__()
 
         filters = [('series_id', 'in', limit_to_series_ids)] if (
                 limit_to_series_ids is not None) else None
-        series = pd.read_parquet(data_path, filters=filters)
-        series = series.sort_values(['series_id', 'step'])
+
+        if load_series:
+            series = pd.read_parquet(data_path, filters=filters)
+            series = series.sort_values(['series_id', 'step'])
+        else:
+            series = None
 
         self._series = series
         self._meta = meta
@@ -120,6 +127,10 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return self._meta.shape[0]
+
+    @property
+    def meta(self):
+        return self._meta
 
 
 def is_valid_sequence(seq_meta: pd.Series, sequence_length: int):

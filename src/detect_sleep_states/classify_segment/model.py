@@ -1,7 +1,6 @@
 from typing import Dict, Any
 
 import lightning
-import pytorch_lightning
 import torch
 import torchmetrics
 from torch import nn
@@ -64,7 +63,7 @@ class DetectSleepModel(nn.Module):
         return x
 
 
-class ClassifySegmentModel(pytorch_lightning.LightningModule):
+class ClassifySegmentModel(lightning.pytorch.LightningModule):
     def __init__(
         self,
         learning_rate,
@@ -130,9 +129,7 @@ class ClassifySegmentModel(pytorch_lightning.LightningModule):
         scores = torch.nn.functional.softmax(logits, dim=1)
         res = [{
             'pred': label_id_str_map[preds[i].item()],
-            'score': scores[i][preds[i]].item(),
-            'start': data['start'][i].item(),
-            'end': data['end'][i].item()
+            'scores': scores[i]
         } for i in range(len(preds))]
         return res
 
