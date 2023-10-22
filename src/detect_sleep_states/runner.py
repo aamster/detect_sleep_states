@@ -61,11 +61,11 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
 
     def run(self):
         preds = self._detect_sleep_segments()
-        if self.args['mode'] == 'validate':
-            targets = self._get_sequence_targets(preds=preds)
-        else:
-            targets = None
-        preds['label'] = targets
+        # if self.args['mode'] == 'validate':
+        #     targets = self._get_sequence_targets(preds=preds)
+        # else:
+        #     targets = None
+        # preds['label'] = targets
         return preds
 
     def _get_sequence_targets(self, preds: pd.DataFrame):
