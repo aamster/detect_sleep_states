@@ -10,8 +10,7 @@ from lightning import Trainer
 from tqdm import tqdm
 
 from detect_sleep_states.classify_segment.data_module import SleepDataModule
-from detect_sleep_states.classify_segment.dataset import Label, \
-    label_id_str_map
+from detect_sleep_states.classify_segment.dataset import Label
 from detect_sleep_states.classify_segment.model import ClassifySegmentModel, \
     DetectSleepModel
 
@@ -29,6 +28,7 @@ class DetectSleepStatesSchema(argschema.ArgSchema):
     is_debug = argschema.fields.Bool(default=False)
     classify_segment_model_checkpoint = argschema.fields.InputFile(
         required=True)
+    num_workers = argschema.fields.Int(default=0)
     mode = argschema.fields.String()
 
 
@@ -122,7 +122,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
                     batch_size=self.args['batch_size'],
                     data_path=self.args['data_path'],
                     meta=meta_sequence,
-                    num_workers=0,
+                    num_workers=self.args['num_workers'],
                     train_transform=albumentations.Compose([
                         albumentations.Normalize(mean=0, std=1),
                         ToTensorV2()
