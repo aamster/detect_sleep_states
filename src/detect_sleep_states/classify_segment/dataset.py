@@ -60,7 +60,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         else:
             series = None
 
-        self._series = series
+        self._series = series.set_index('series_id')
         self._meta = meta
         self._is_train = is_train
         self._sequence_length = sequence_length
@@ -123,7 +123,10 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             'start_hour': start_hour
         }
 
-        return data, label
+        if label is None:
+            return data
+        else:
+            return data, label
 
     def __len__(self):
         return self._meta.shape[0]

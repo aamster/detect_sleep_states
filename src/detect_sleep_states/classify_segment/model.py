@@ -123,7 +123,7 @@ class ClassifySegmentModel(lightning.pytorch.LightningModule):
             batch_idx: int,
             dataloader_idx: int = 0
     ):
-        data, target = batch
+        data = batch
         logits = self.model(data['sequence'], start_hour=data['start_hour'])
         preds = torch.argmax(logits, dim=1)
         scores = torch.nn.functional.softmax(logits, dim=1)

@@ -1,14 +1,13 @@
-import os
 from collections import defaultdict
 from typing import List, Dict, Optional
 
 import albumentations
 import argschema
-import numpy as np
 import pandas as pd
 import torch
 from albumentations.pytorch import ToTensorV2
 from lightning import Trainer
+from tqdm import tqdm
 
 from detect_sleep_states.classify_segment.data_module import SleepDataModule
 from detect_sleep_states.classify_segment.dataset import Label, \
@@ -19,9 +18,14 @@ from detect_sleep_states.classify_segment.model import ClassifySegmentModel, \
 
 class DetectSleepStatesSchema(argschema.ArgSchema):
     data_path = argschema.fields.InputFile(required=True)
-    meta_path = argschema.fields.InputFile(required=True)
+    events_path = argschema.fields.InputFile(
+        required=False,
+        allow_none=True,
+        default=None
+    )
     batch_size = argschema.fields.Int(default=16)
     sequence_length = argschema.fields.Int(default=720)
+    step_size = argschema.fields.Int(default=144)
     is_debug = argschema.fields.Bool(default=False)
     classify_segment_model_checkpoint = argschema.fields.InputFile(
         required=True)
@@ -47,28 +51,13 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
             batch_size=self.args['batch_size']
         )
         self._trainer = Trainer(
-            limit_predict_batches=1 if self.args['is_debug'] else None
+            limit_predict_batches=3 if self.args['is_debug'] else None
         )
         self._target = target
 
-        meta = pd.read_csv(self.args['meta_path'])
-        self._data_mod = SleepDataModule(
-            batch_size=self.args['batch_size'],
-            data_path=self.args['data_path'],
-            meta=meta,
-            num_workers=os.cpu_count(),
-            train_transform=albumentations.Compose([
-                albumentations.Normalize(mean=0, std=1),
-                ToTensorV2()
-            ]),
-            inference_transform=albumentations.Compose([
-                albumentations.Normalize(mean=0, std=1),
-                ToTensorV2()
-            ]),
-            sequence_length=self.args['sequence_length'],
-            load_series=False
-        )
-        self._data_mod.setup(stage='predict')
+        if self.args['mode'] == 'validate':
+            if self.args['events_path'] is None:
+                raise ValueError('if validate, must provide events file')
 
     def run(self):
         preds = self._detect_sleep_segments()
@@ -80,53 +69,60 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
         return preds
 
     def _get_sequence_targets(self, preds: pd.DataFrame):
-        events = self._data_mod.predict.meta[
-            self._data_mod.predict.meta['label'].isin([Label.onset.name,
-                                                       Label.wakeup.name])]
+        events = self._clean_events()
         preds = preds.set_index('series_id')
+        events = events.loc[preds.index.unique()]
 
         targets = []
-        for series_id in events.index.unique():
-            series_events = events.loc[series_id]
+        for series_id in preds.index.unique():
             series_preds = preds.loc[series_id]
+
+            series_events = events.loc[series_id]
+            series_events = series_events[
+                (series_events['step'] >= series_preds['start'].min()) &
+                (series_events['step'] <= series_preds['end'].max())
+            ]
+            series_targets = []
 
             events_idx = 0
             preds_idx = 0
+            num_preds = 1 if isinstance(series_preds, pd.Series) else (
+                series_preds.shape)[0]
             while (events_idx < series_events.shape[0] and
-                   preds_idx < series_preds.shape[0]):
+                   preds_idx < num_preds):
                 event = series_events.iloc[events_idx]
-                pred = series_preds.iloc[preds_idx]
+                if isinstance(series_preds, pd.DataFrame):
+                    pred = series_preds.iloc[preds_idx]
+                else:
+                    pred = series_preds
 
-                event_idx = event['start']  # start and end the same
+                event_idx = event['step']
 
                 if pred['start'] <= event_idx <= pred['end']:
-                    targets.append(event['label'])
+                    series_targets.append(event['event'])
                     events_idx += 1
-                else:
-                    targets.append('no_event')
                     preds_idx += 1
-            if self.args['is_debug']:
-                break
+                else:
+                    preds_idx += 1
+            targets += series_targets
         return targets
 
     def _detect_sleep_segments(
-        self,
-        step_size: int = 144
+        self
     ):
+        series_meta = self._construct_predict_set()
         all_preds = []
-        series_sequences = self.construct_series_sequences()
-        for series_id, sequences in series_sequences.items():
-            for sequence_idxs in sequences:
-                meta = self._construct_predict_set(
-                    series_id=series_id,
-                    sequence_idxs=sequence_idxs,
-                    step_size=step_size
-                )
+        for series_id, meta in tqdm(series_meta.items(),
+                                    desc='Series',
+                                    total=len(series_meta)):
+            self.logger.info(f'Series {series_id}')
+
+            for meta_sequence in tqdm(meta, desc='Sequences'):
                 data_mod = SleepDataModule(
                     batch_size=self.args['batch_size'],
                     data_path=self.args['data_path'],
-                    meta=meta,
-                    num_workers=os.cpu_count(),
+                    meta=meta_sequence,
+                    num_workers=0,
                     train_transform=albumentations.Compose([
                         albumentations.Normalize(mean=0, std=1),
                         ToTensorV2()
@@ -146,38 +142,15 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
                 res = res[0]
 
                 preds = []
-                num_preds_to_average = (
-                    int(self.args['sequence_length'] / step_size))
-                for i in range(0, len(res)):
-                    preds_to_average = torch.vstack([
-                        res[i]['scores'] for i in
-                        range(i, max(i-num_preds_to_average, -1), -1)])
-                    scores_averaged = preds_to_average.mean(dim=0)
-                    pred = torch.argmax(scores_averaged)
-                    pred = label_id_str_map[pred.item()]
+                for i in range(len(res)):
                     preds.append({
                         'series_id': series_id,
-                        'start': meta.iloc[i]['start'],
-                        'end': meta.iloc[i]['start'] + step_size,
-                        'pred': pred
+                        'start': meta_sequence.iloc[i]['start'],
+                        'end': meta_sequence.iloc[i]['end'],
+                        'pred': res[i]['pred']
                     })
-                if step_size < self.args['sequence_length']:
-                    # fill in remaining sequences
-                    for i in range(len(res) - num_preds_to_average + 1,
-                                   len(res)):
-                        preds_to_average = torch.vstack([
-                            res[i]['scores'] for i in
-                            range(i, len(res))])
-                        scores_averaged = preds_to_average.mean(dim=0)
-                        pred = torch.argmax(scores_averaged)
-                        pred = label_id_str_map[pred.item()]
-                        preds.append({
-                            'series_id': series_id,
-                            'start': meta.iloc[i]['end'] - step_size,
-                            'end': meta.iloc[i]['end'],
-                            'pred': pred
-                        })
                 preds = pd.DataFrame(preds)
+                preds = self._merge_repeated_preds(preds=preds)
                 all_preds.append(preds)
 
                 if self.args['is_debug']:
@@ -186,52 +159,64 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
             if self.args['is_debug']:
                 break
         all_preds = pd.concat(all_preds)
+        all_preds = all_preds[all_preds['pred'].isin(
+            [Label.onset.name, Label.wakeup.name])]
         return all_preds
 
-    def _construct_predict_set(
-        self,
-        series_id: str,
-        sequence_idxs: List[int],
-        step_size: int
-    ):
-        meta = self._data_mod.predict.meta.iloc[sequence_idxs]
-        rows = []
-        for row in meta.itertuples():
-            if row.label in (Label.onset.name, Label.wakeup.name):
-                continue
-            for start in range(row.start, row.end, step_size):
-                end = start + self.args['sequence_length']
-                if end < row.end:
-                    label = row.label
-                else:
-                    if row.label == Label.sleep.name:
-                        label = Label.wakeup.name
-                    else:
-                        label = Label.onset.name
-                rows.append({'series_id': series_id, 'start': start,
-                             'end': end, 'night': row.night,
-                             'label': label})
-        meta = pd.DataFrame(rows)
-        return meta
+    def _clean_events(self):
+        events = pd.read_csv(self.args['events_path'])
+        events = events[~events['step'].isna()]
 
-    def construct_series_sequences(self):
-        series_ends = dict()
-        meta = self._data_mod.predict.meta
-        series_sequences = defaultdict(list)
-        for i, row in enumerate(meta.itertuples()):
-            series_id = row.Index
-            if series_id not in series_sequences:
-                series_sequences[series_id].append([i])
-            elif (meta.iloc[i]['start'] >
-                  series_ends[series_id] + 1):
-                series_sequences[series_id].append([i])
-            else:
-                series_sequences[series_id][-1].append(i)
-            series_ends[series_id] = max(
-                series_ends.get(series_id, -float('inf')),
-                row.end
-            )
-        return series_sequences
+        # Remove nights where there isn't a complete record
+        event_counts = events.groupby(['series_id', 'night']).size()
+        event_counts = event_counts.reset_index().rename(
+            columns={0: 'count'})
+        invalid = event_counts[event_counts['count'] < 2]
+        invalid_series_nights = invalid['series_id'].str.cat(invalid['night'].astype(str), sep='_')
+        series_nights = events['series_id'].str.cat(events['night'].astype(str), sep='_')
+        events = events[~series_nights.isin(invalid_series_nights)]
+
+        events = events.set_index('series_id')
+        return events
+
+    def _construct_predict_set(self):
+        events = self._clean_events()
+
+        series_meta = defaultdict(list)
+        for series_id in tqdm(events.index.unique()):
+            series_events = events.loc[series_id]
+            prev_night = 0
+            i = 0
+            start = 0
+            end = -self.args['sequence_length']
+            cur_night = series_events.iloc[i]['night']
+            while i < len(series_events):
+                rows = []
+                while i < len(series_events) and (
+                        cur_night == prev_night or cur_night == prev_night + 1):
+                    end = series_events.iloc[i]['step']
+                    prev_night = series_events.iloc[i]['night']
+                    i += 1
+                    cur_night = series_events.iloc[min(len(series_events)-1, i)]['night']
+                for start_idx in range(int(start),
+                                       int(end)+self.args['sequence_length'],
+                                       self.args['step_size']):
+                    end_idx = start_idx + self.args['sequence_length']
+                    row = {
+                        'series_id': series_id,
+                        'start': start_idx,
+                        'end': end_idx
+                    }
+                    rows.append(row)
+                prev_night = cur_night
+                start = (series_events.iloc[min(len(series_events)-1, i)]['step'] -
+                         self.args['sequence_length'] +
+                         self.args['step_size'])
+
+                if len(rows) > 0:
+                    meta = pd.DataFrame(rows)
+                    series_meta[series_id].append(meta)
+        return series_meta
 
     def _detect_sleep_segments_for_series(
             self,
@@ -239,7 +224,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
             target: Optional[pd.DataFrame] = None):
         if target is not None:
             target = target.set_index('series_id')
-        all_series_preds = self.construct_series_sequences(
+        all_series_preds = self.construct_series_ranges(
             preds=preds, target=target
         )
 
@@ -257,47 +242,31 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
         return res, target
 
     @staticmethod
-    def _merge_repeated_preds(all_series_preds: Dict, target: pd.DataFrame):
+    def _merge_repeated_preds(preds: pd.DataFrame):
         """
         if pred is e.g. onset onset onset, then this will merge into a
         single sequence, and adjust the record to have start -> of the
         entire seq
         :return:
         """
-        targets = []
-
-        for series_id, series_preds in all_series_preds.items():
-            for seq_num, sequence in enumerate(series_preds):
-                remove_idx = set()
-                i = 0
-                while i < len(sequence):
-                    label = sequence[i][0]['pred']
-
-                    if label in (Label.onset.name, Label.wakeup.name):
-                        merged = target.iloc[sequence[i][2]].copy()
-                        start_idx = i
-                        i += 1
-                        while (i < len(sequence) and
-                               sequence[i][0]['pred'] == label):
-                            remove_idx.add(i)
-                            i += 1
-                        merged['end'] = target.iloc[sequence[min(i, len(sequence)-1)][2] - 1][
-                            'end']
-                        index_to_update = sequence[start_idx][2]
-                        if label in target.iloc[sequence[start_idx][2]:sequence[min(i, len(sequence)-1)][2]]['label'].tolist():
-                            merged['label'] = label
-                        target.iloc[index_to_update] = merged
-                    else:
-                        i += 1
-                all_series_preds[series_id][seq_num] = [
-                    sequence[i]
-                    for i in range(len(sequence)) if i not in remove_idx]
-                targets.append(
-                    target.iloc[
-                        [sequence[i][2] for i in range(len(sequence))
-                         if i not in remove_idx]])
-        target = pd.concat(targets)
-        return target
+        series_id = preds.iloc[0]['series_id']
+        merged = []
+        i = 0
+        while i < len(preds):
+            pred = preds.iloc[i]
+            start = pred['start']
+            end = pred['end']
+            while i < len(preds) and preds.iloc[i]['pred'] == pred['pred']:
+                end = pred['end']
+                i += 1
+            merged.append({
+                'series_id': series_id,
+                'start': start,
+                'end': end,
+                'pred': pred['pred']
+            })
+        merged = pd.DataFrame(merged)
+        return merged
 
     @staticmethod
     def fix(all_series_preds):
