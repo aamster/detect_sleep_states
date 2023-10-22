@@ -110,7 +110,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
     def _detect_sleep_segments(
         self
     ):
-        series_meta = self._construct_predict_set()
+        series_meta = self._construct_valid_set()
         all_preds = []
         for series_id, meta in tqdm(series_meta.items(),
                                     desc='Series',
@@ -177,9 +177,15 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
         events = events[~series_nights.isin(invalid_series_nights)]
 
         events = events.set_index('series_id')
+
+        # protect against sequence going past the data
+        events_ = []
+        for series_id in events.index.unique():
+            events_.append(events.loc[series_id].iloc[:-1])
+        events = pd.concat(events_)
         return events
 
-    def _construct_predict_set(self):
+    def _construct_valid_set(self):
         events = self._clean_events()
 
         series_meta = defaultdict(list)
@@ -198,10 +204,12 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
                     prev_night = series_events.iloc[i]['night']
                     i += 1
                     cur_night = series_events.iloc[min(len(series_events)-1, i)]['night']
+
                 for start_idx in range(int(start),
                                        int(end)+self.args['sequence_length'],
                                        self.args['step_size']):
                     end_idx = start_idx + self.args['sequence_length']
+
                     row = {
                         'series_id': series_id,
                         'start': start_idx,
