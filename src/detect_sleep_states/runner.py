@@ -13,6 +13,7 @@ from detect_sleep_states.classify_segment.data_module import SleepDataModule
 from detect_sleep_states.classify_segment.dataset import Label
 from detect_sleep_states.classify_segment.model import ClassifySegmentModel, \
     DetectSleepModel
+from detect_sleep_states.util import clean_events
 
 
 class DetectSleepStatesSchema(argschema.ArgSchema):
@@ -61,6 +62,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
 
     def run(self):
         preds = self._detect_sleep_segments()
+        preds = self._merge_repeated_preds(preds=preds)
         # if self.args['mode'] == 'validate':
         #     targets = self._get_sequence_targets(preds=preds)
         # else:
@@ -69,7 +71,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
         return preds
 
     def _get_sequence_targets(self, preds: pd.DataFrame):
-        events = self._clean_events()
+        events = clean_events(events_path=self.args['events_path'])
         preds = preds.set_index('series_id')
         events = events.loc[preds.index.unique()]
 
@@ -139,16 +141,16 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
                     model=self._model,
                     datamodule=data_mod
                 )
-                res = res[0]
 
                 preds = []
-                for i in range(len(res)):
-                    preds.append({
-                        'series_id': series_id,
-                        'start': meta_sequence.iloc[i]['start'],
-                        'end': meta_sequence.iloc[i]['end'],
-                        'pred': res[i]['pred']
-                    })
+                for batch in res:
+                    for pred in batch:
+                        preds.append({
+                            'series_id': series_id,
+                            'start': pred['start'],
+                            'end': pred['end'],
+                            'pred': pred['pred']
+                        })
                 preds = pd.DataFrame(preds)
                 preds = self._merge_repeated_preds(preds=preds)
                 all_preds.append(preds)
@@ -163,30 +165,8 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
             [Label.onset.name, Label.wakeup.name])]
         return all_preds
 
-    def _clean_events(self):
-        events = pd.read_csv(self.args['events_path'])
-        events = events[~events['step'].isna()]
-
-        # Remove nights where there isn't a complete record
-        event_counts = events.groupby(['series_id', 'night']).size()
-        event_counts = event_counts.reset_index().rename(
-            columns={0: 'count'})
-        invalid = event_counts[event_counts['count'] < 2]
-        invalid_series_nights = invalid['series_id'].str.cat(invalid['night'].astype(str), sep='_')
-        series_nights = events['series_id'].str.cat(events['night'].astype(str), sep='_')
-        events = events[~series_nights.isin(invalid_series_nights)]
-
-        events = events.set_index('series_id')
-
-        # protect against sequence going past the data
-        events_ = []
-        for series_id in events.index.unique():
-            events_.append(events.loc[series_id].iloc[:-1])
-        events = pd.concat(events_)
-        return events
-
     def _construct_valid_set(self):
-        events = self._clean_events()
+        events = clean_events(events_path=self.args['events_path'])
 
         series_meta = defaultdict(list)
         for series_id in tqdm(events.index.unique()):
@@ -265,7 +245,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
             start = pred['start']
             end = pred['end']
             while i < len(preds) and preds.iloc[i]['pred'] == pred['pred']:
-                end = pred['end']
+                end = preds.iloc[i]['end']
                 i += 1
             merged.append({
                 'series_id': series_id,
