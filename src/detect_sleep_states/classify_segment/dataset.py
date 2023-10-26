@@ -111,6 +111,12 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             data['enmo']
         ])
 
+        if data.shape[1] < self._sequence_length:
+            data = np.pad(
+                data,
+                pad_width=((0, 0), (0, self._sequence_length - data.shape[1]))
+            )
+
         data = self._transform(image=data)['image']
 
         data = data.squeeze()

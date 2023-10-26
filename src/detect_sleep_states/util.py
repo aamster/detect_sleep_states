@@ -17,10 +17,4 @@ def clean_events(events_path: str):
     events = events[~series_nights.isin(invalid_series_nights)]
 
     events = events.set_index('series_id')
-
-    # protect against sequence going past the data
-    events_ = []
-    for series_id in events.index.unique():
-        events_.append(events.loc[series_id].iloc[:-1])
-    events = pd.concat(events_)
     return events

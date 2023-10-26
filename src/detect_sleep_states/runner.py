@@ -186,7 +186,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
                     cur_night = series_events.iloc[min(len(series_events)-1, i)]['night']
 
                 for start_idx in range(int(start),
-                                       int(end)+self.args['sequence_length'],
+                                       int(end),
                                        self.args['step_size']):
                     end_idx = start_idx + self.args['sequence_length']
 
