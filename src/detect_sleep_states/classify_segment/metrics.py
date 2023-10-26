@@ -1,9 +1,7 @@
-from collections import defaultdict
 from typing import Union
 
 import pandas as pd
 import torch
-import torchmetrics
 
 from detect_sleep_states.util import clean_events
 
@@ -53,13 +51,15 @@ def calc_accuracy(
                     pred_matches[pred_idx].add(event_idx)
 
         for pred_idx, event_idx_matches in pred_matches.items():
+            if len(event_idx_matches) == 1:
+                continue
+            to_insert = {
+                'series_id': series_id,
+                'event': 'no_event',
+                'step': None
+            }
             if len(event_idx_matches) == 0:
                 pred = series_preds.iloc[pred_idx]
-                to_insert = {
-                    'series_id': series_id,
-                    'event': 'no_event',
-                    'step': None
-                }
                 i = 0
                 inserted = False
                 while i < len(series_events_corrected):
@@ -82,7 +82,13 @@ def calc_accuracy(
                 if not inserted:
                     series_events_corrected.append(to_insert)
 
+            else:
+                raise NotImplementedError(
+                    'found multiple gt matches for a pred')
+
         for event_idx, pred_idx_matches in event_matches.items():
+            if len(pred_idx_matches) == 1:
+                continue
             if len(pred_idx_matches) == 0:
                 event = series_events.iloc[event_idx]
                 to_insert = {
@@ -112,29 +118,22 @@ def calc_accuracy(
 
                 if not inserted:
                     series_preds_corrected.append(to_insert)
+            else:
+                raise NotImplementedError(
+                    'Found multiple pred matches for a gt')
 
         all_preds += [label_idx_map[x['pred']] for x in series_preds_corrected]
         all_events += [label_idx_map[x['event']] for x in series_events_corrected]
 
-    precision = torchmetrics.classification.MulticlassPrecision(
-        num_classes=3)
-    recall = torchmetrics.classification.MulticlassRecall(
-        num_classes=3
-    )
-    f1 = torchmetrics.classification.MulticlassF1Score(
-        num_classes=3
-    )
-    precision.update(
-        preds=torch.tensor(all_preds),
-        target=torch.tensor(all_events)
-    )
-    recall.update(
-        preds=torch.tensor(all_preds),
-        target=torch.tensor(all_events)
-    )
-    f1.update(
-        preds=torch.tensor(all_preds),
-        target=torch.tensor(all_events)
-    )
-    return (precision.compute(), recall.compute(), f1.compute(),
-            all_preds, all_events)
+    all_preds = torch.tensor(all_preds)
+    all_events = torch.tensor(all_events)
+
+    tp = (all_preds == all_events).sum().item()
+    fp = ((all_preds != 0) & (all_preds != all_events)).sum().item()
+    fn = ((all_events != 0) & (all_preds != all_events)).sum().item()
+
+    p = tp / (tp + fp)
+    r = tp / (tp + fn)
+    f1 = 2 * p * r / (p + r)
+
+    return p, r, f1, all_preds, all_events
