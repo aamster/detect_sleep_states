@@ -237,22 +237,26 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
         entire seq
         :return:
         """
-        series_id = preds.iloc[0]['series_id']
         merged = []
-        i = 0
-        while i < len(preds):
-            pred = preds.iloc[i]
-            start = pred['start']
-            end = pred['end']
-            while i < len(preds) and preds.iloc[i]['pred'] == pred['pred']:
-                end = preds.iloc[i]['end']
-                i += 1
-            merged.append({
-                'series_id': series_id,
-                'start': start,
-                'end': end,
-                'pred': pred['pred']
-            })
+        if preds.index.name != 'series_id':
+            preds = preds.set_index('series_id')
+
+        for series_id in preds.index.unique():
+            series_preds = preds.loc[series_id]
+            i = 0
+            while i < len(series_preds):
+                pred = series_preds.iloc[i]
+                start = pred['start']
+                end = pred['end']
+                while i < len(series_preds) and series_preds.iloc[i]['pred'] == pred['pred']:
+                    end = series_preds.iloc[i]['end']
+                    i += 1
+                merged.append({
+                    'series_id': series_id,
+                    'start': start,
+                    'end': end,
+                    'pred': pred['pred']
+                })
         merged = pd.DataFrame(merged)
         return merged
 
