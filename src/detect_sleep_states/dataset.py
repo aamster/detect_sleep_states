@@ -11,15 +11,11 @@ import torch.utils.data
 class Label(Enum):
     sleep = 0
     awake = 1
-    onset = 2
-    wakeup = 3
 
 
 label_id_str_map = {
     0: 'sleep',
-    1: 'awake',
-    2: 'onset',
-    3: 'wakeup'
+    1: 'awake'
 }
 
 
@@ -27,10 +23,11 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         data_path: Path,
-        meta: pd.DataFrame,
+        sequences: pd.DataFrame,
         transform,
         sequence_length: int = 720,
         is_train: bool = True,
+        events: Optional[pd.DataFrame] = None,
         limit_to_series_ids: Optional[List] = None,
         load_series: bool = True
     ):
@@ -38,9 +35,12 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
         :param data_path:
             Path to series (parquet)
-        :param meta:
+        :param sequences:
             Table with columns series_id, start, end
             In train mode should also contain label, night
+        :param events
+            Table with all onset, wakeup events.
+            Only relevant in training
         :param sequence_length:
         :param is_train:
         :param transform:
@@ -60,14 +60,18 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         else:
             series = None
 
+        if events.index.name != 'series_id':
+            events = events.set_index('series_id')
+
         self._series = series.set_index('series_id')
-        self._meta = meta
+        self._sequences = sequences
+        self._events = events
         self._is_train = is_train
         self._sequence_length = sequence_length
         self._transform = transform
 
     def __getitem__(self, index):
-        row = self._meta.iloc[index]
+        row = self._sequences.iloc[index]
         if not is_valid_sequence(
                 seq_meta=row,
                 sequence_length=self._sequence_length):
@@ -85,16 +89,41 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
                 # Either Onset or wakeup transition
                 # Selecting a random sequence that includes the transition
                 # index
+
+                # making it easier by limiting sequence to not start or end
+                # exactly on the transition, in which case it would be hard
+                # to detect
+                shift = 60
+
                 start = np.random.choice(
-                    np.arange(row['start'] - self._sequence_length,
-                              row['start'] + 1),
+                    np.arange(row['start'] - self._sequence_length + shift,
+                              row['start'] - shift),
                     size=1
                 )[0]
         else:
             start = row['start']
 
         if 'label' in row:
-            label = getattr(Label, row['label']).value
+            events = self._events.loc[row.name]
+            events = events[(events['step'] >= start) &
+                            (events['step'] <= start+self._sequence_length)]
+            if row['label'] in (Label.sleep.name, Label.awake.name):
+                label = torch.tensor([getattr(Label, row['label']).value] *
+                                     self._sequence_length, dtype=torch.long)
+            else:
+                label = torch.zeros(self._sequence_length, dtype=torch.long)
+                prev_event_idx = 0
+                for event in events.itertuples():
+                    if event.event == 'onset':
+                        before_label = Label.awake.value
+                        after_label = Label.sleep.value
+                    else:
+                        before_label = Label.sleep.value
+                        after_label = Label.awake.value
+                    label[prev_event_idx:int(event.step) - start] = before_label
+                    label[int(event.step) - start:] = after_label
+                    prev_event_idx = int(event.step) - start
+
         else:
             label = None
 
@@ -119,7 +148,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
         data = self._transform(image=data)['image']
 
-        data = data.squeeze()
+        data = data.squeeze(dim=0)
 
         data = {
             'sequence': data,
@@ -135,11 +164,11 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             return data, label
 
     def __len__(self):
-        return self._meta.shape[0]
+        return self._sequences.shape[0]
 
     @property
     def meta(self):
-        return self._meta
+        return self._sequences
 
 
 def is_valid_sequence(seq_meta: pd.Series, sequence_length: int):

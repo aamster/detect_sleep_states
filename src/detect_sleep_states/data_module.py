@@ -1,3 +1,4 @@
+import random
 from pathlib import Path
 from typing import Optional
 
@@ -7,8 +8,9 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from detect_sleep_states.classify_segment.dataset import \
+from detect_sleep_states.dataset import \
     ClassifySegmentDataset, is_valid_sequence, Label
+from detect_sleep_states.util import clean_events
 
 
 class SleepDataModule(lightning.LightningDataModule):
@@ -18,6 +20,7 @@ class SleepDataModule(lightning.LightningDataModule):
         num_workers: int,
         meta: pd.DataFrame,
         data_path: Path,
+        events_path: Optional[Path] = None,
         sequence_length: int = 720,
         train_transform: Optional[transforms.Compose] = None,
         inference_transform: Optional[transforms.Compose] = None,
@@ -29,7 +32,10 @@ class SleepDataModule(lightning.LightningDataModule):
         meta = meta[meta.apply(lambda x: is_valid_sequence(
             seq_meta=x, sequence_length=sequence_length), axis=1)]
 
-        self._meta = meta.set_index('series_id')
+        if meta.index.name != 'series_id':
+            meta = meta.set_index('series_id')
+        self._meta = meta
+        self._events = clean_events(events_path=str(events_path))
         self._series_ids = self._meta.index.unique()
         self._batch_size = batch_size
         self._num_workers = num_workers
@@ -57,19 +63,51 @@ class SleepDataModule(lightning.LightningDataModule):
                 train_series_id = pd.Series(self._meta.index).sample(1)
                 meta = self._meta.loc[train_series_id]
 
-                meta = pd.concat([
+                train = pd.concat([
                     meta.loc[(meta['night'] != meta['night'].max()) & (meta['label'] == 'sleep')].sample(1),
                     meta.loc[(meta['night'] != meta['night'].max()) & (
                                 meta['label'] == 'awake')].sample(1),
+                    meta.loc[(meta['night'] != meta['night'].max()) & (
+                            meta['label'] == 'onset')].sample(1),
+                    meta.loc[(meta['night'] != meta['night'].max()) & (
+                            meta['label'] == 'wakeup')].sample(1)
                 ])
-                train = self.get_test_set(meta=meta)
+
+                rng = np.random.default_rng(1234)
+                onset_sequence_start = rng.choice(range(int(self._sequence_length / 2)))
+                wakeup_sequence_start = rng.choice(
+                    range(int(self._sequence_length / 2)))
+                sleep_sequence_start = rng.choice(
+                    range(
+                        train.loc[train['label'] == 'sleep', 'start'].iloc[0],
+                        train.loc[train['label'] == 'sleep', 'end'].iloc[0] - self._sequence_length
+                    )
+                )
+                awake_sequence_start = rng.choice(
+                    range(
+                        train.loc[train['label'] == 'awake', 'start'].iloc[0],
+                        train.loc[train['label'] == 'awake', 'end'].iloc[0] - self._sequence_length
+                    )
+                )
+                train.loc[train['label'] == 'sleep', 'start'] = sleep_sequence_start
+                train.loc[train['label'] == 'sleep', 'end'] =  sleep_sequence_start + self._sequence_length
+
+                train.loc[train['label'] == 'awake', 'start'] = awake_sequence_start
+                train.loc[train['label'] == 'awake', 'end'] =  awake_sequence_start + self._sequence_length
+
+                train.loc[train['label'] == 'onset', 'start'] -= onset_sequence_start
+                train.loc[train['label'] == 'onset', 'end'] = train.loc[train['label'] == 'onset', 'start'] + self._sequence_length
+
+                train.loc[train['label'] == 'wakeup', 'start'] -= wakeup_sequence_start
+                train.loc[train['label'] == 'wakeup', 'end'] = train.loc[train['label'] == 'wakeup', 'start'] + self._sequence_length
                 train_series_ids = train.index.unique()
             else:
                 train = self._meta.loc[train_series_ids]
             self._train = ClassifySegmentDataset(
                 data_path=self._data_path,
-                meta=train,
+                sequences=train,
                 sequence_length=self._sequence_length,
+                events=self._events.loc[train_series_ids],
                 is_train=False if self._is_debug else True,
                 transform=self._train_transform,
                 limit_to_series_ids=train_series_ids
@@ -77,16 +115,17 @@ class SleepDataModule(lightning.LightningDataModule):
 
             self._val = ClassifySegmentDataset(
                 data_path=self._data_path,
-                meta=self.get_test_set(meta=self._meta.loc[val_series_ids]),
+                sequences=self.get_test_set(meta=self._meta.loc[val_series_ids]),
+                events=self._events.loc[val_series_ids],
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
                 limit_to_series_ids=val_series_ids,
-            ) if not self._is_debug else None
+            )
         elif stage == 'predict':
             self._predict = ClassifySegmentDataset(
                 data_path=self._data_path,
-                meta=self._meta,
+                sequences=self._meta,
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
@@ -124,9 +163,9 @@ class SleepDataModule(lightning.LightningDataModule):
                 if getattr(row, 'label', None) is not None:
                     if datum['end'] > row.end:
                         if row.label == Label.sleep.name:
-                            label = Label.wakeup.name
+                            label = 'wakeup'
                         else:
-                            label = Label.onset.name
+                            label = 'onset'
                     else:
                         label = row.label
                     datum['label'] = label

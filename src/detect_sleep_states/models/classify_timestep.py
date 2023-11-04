@@ -6,64 +6,65 @@ import torchmetrics
 from torch import nn
 from torchvision.ops.misc import ConvNormActivation
 
-from detect_sleep_states.classify_segment.dataset import label_id_str_map
+from detect_sleep_states.dataset import label_id_str_map
 
 
-class DetectSleepModel(nn.Module):
+class SamePaddingTimestepPredictor1dCNN(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.conv = nn.Sequential(
+        self.encoder = nn.Sequential(
             ConvNormActivation(
                 in_channels=2,
                 out_channels=64,
-                kernel_size=50,
+                kernel_size=49,
                 bias=False,
                 norm_layer=nn.BatchNorm1d,
                 conv_layer=nn.Conv1d,
-                stride=1
+                stride=1,
+                padding='same'
             ),
-            nn.MaxPool1d(kernel_size=3, stride=2),
             ConvNormActivation(
                 in_channels=64,
                 out_channels=128,
-                kernel_size=50,
+                kernel_size=49,
                 bias=False,
                 norm_layer=nn.BatchNorm1d,
                 conv_layer=nn.Conv1d,
-                stride=1
+                stride=1,
+                padding='same'
             ),
-            nn.MaxPool1d(kernel_size=3, stride=2),
             ConvNormActivation(
                 in_channels=128,
                 out_channels=256,
-                kernel_size=50,
+                kernel_size=49,
                 bias=False,
                 norm_layer=nn.BatchNorm1d,
                 conv_layer=nn.Conv1d,
-                stride=1
-            ),
-            nn.MaxPool1d(kernel_size=3, stride=2),
-            nn.AdaptiveAvgPool1d(output_size=1),
-            nn.Flatten(start_dim=1)
+                stride=1,
+                padding='same'
+            )
         )
 
-        self.fc = nn.Sequential(
-            nn.Linear(256 + 24, len(label_id_str_map), bias=True)
+        self.classifier = nn.Conv1d(
+            in_channels=256+24,
+            out_channels=len(label_id_str_map),
+            kernel_size=1
         )
 
     def forward(self, x, start_hour):
-        x = self.conv(x)
+        x = self.encoder(x)
 
         start_hour = nn.functional.one_hot(start_hour.long(), num_classes=24)
+        start_hour = start_hour.unsqueeze(2).repeat(1, 1, x.shape[-1])
 
         x = torch.cat([x, start_hour], 1)
-        x = self.fc(x)
+        x = self.classifier(x)
 
         return x
 
 
-class ClassifySegmentModel(lightning.pytorch.LightningModule):
+class ClassifyTimestepModel(lightning.pytorch.LightningModule):
     def __init__(
         self,
         learning_rate,
@@ -72,22 +73,13 @@ class ClassifySegmentModel(lightning.pytorch.LightningModule):
         batch_size: int
     ):
         super().__init__()
-        num_classes = len(label_id_str_map)
         self._loss_function = torch.nn.CrossEntropyLoss()
         self.model = model
         self._batch_size = batch_size
 
-        self.val_precision = torchmetrics.classification.MulticlassPrecision(
-            num_classes=num_classes)
-        self.val_recall = torchmetrics.classification.MulticlassRecall(
-            num_classes=num_classes
-        )
-        self.train_f1 = torchmetrics.classification.MulticlassF1Score(
-            num_classes=num_classes
-        )
-        self.val_f1 = torchmetrics.classification.MulticlassF1Score(
-            num_classes=num_classes
-        )
+        self.train_aucroc = torchmetrics.classification.BinaryAUROC()
+        self.val_aucroc = torchmetrics.classification.BinaryAUROC()
+
         self._learning_rate = learning_rate
         self._hyperparams = hyperparams
 
@@ -97,7 +89,7 @@ class ClassifySegmentModel(lightning.pytorch.LightningModule):
         loss = self._loss_function(logits, target)
         preds = torch.argmax(logits, dim=1)
 
-        self.train_f1.update(preds, target)
+        self.train_aucroc.update(preds, target)
         self.log("train_loss", loss, prog_bar=True,
                  batch_size=self._batch_size)
         self.logger.log_metrics({
@@ -113,9 +105,7 @@ class ClassifySegmentModel(lightning.pytorch.LightningModule):
                  batch_size=self._batch_size)
 
         preds = torch.argmax(logits, dim=1)
-        self.val_precision.update(preds=preds, target=target)
-        self.val_recall.update(preds=preds, target=target)
-        self.val_f1.update(preds=preds, target=target)
+        self.val_aucroc.update(preds=preds, target=target)
 
     def predict_step(
             self,
@@ -139,20 +129,14 @@ class ClassifySegmentModel(lightning.pytorch.LightningModule):
         self.logger.log_hyperparams(params=self._hyperparams)
 
     def on_train_epoch_end(self) -> None:
-        self.log('train_f1', self.train_f1.compute().item(),
+        self.log('train_aucroc', self.train_aucroc.compute().item(),
                  on_epoch=True, batch_size=self._batch_size)
-        self.train_f1.reset()
+        self.train_aucroc.reset()
 
     def on_validation_epoch_end(self) -> None:
-        self.log('val_f1', self.val_f1.compute().item(), on_epoch=True,
+        self.log('val_aucroc', self.val_aucroc.compute().item(), on_epoch=True,
                  batch_size=self._batch_size)
-        self.log('val_precision', self.val_precision.compute().item(),
-                 on_epoch=True, batch_size=self._batch_size)
-        self.log('val_recall', self.val_recall.compute().item(),
-                 on_epoch=True, batch_size=self._batch_size)
-        self.val_f1.reset()
-        self.val_precision.reset()
-        self.val_recall.reset()
+        self.val_aucroc.reset()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self._learning_rate)

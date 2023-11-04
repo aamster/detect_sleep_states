@@ -22,7 +22,8 @@ dependencies = [
     "torchmetrics",
     "torch",
     "pyarrow",
-    "albumentations"
+    "albumentations",
+    "unet @ git+https://github.com/aamster/unet.git"
 ]
 
 [tool.setuptools.packages.find]

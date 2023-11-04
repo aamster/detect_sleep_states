@@ -21,6 +21,9 @@ def calc_accuracy(
     FP = 0
     FN = 0
 
+    fps = []
+    fns = []
+
     for series_id in events.index.unique():
         series_events = events.loc[[series_id]]
         series_preds = preds.loc[[series_id]]
@@ -49,10 +52,12 @@ def calc_accuracy(
             TP += len(event_idx_matches)
             if len(event_idx_matches) == 0:
                 FP += 1
+                fps.append({'series_id': series_id, 'idx': pred_idx})
 
         for event_idx, pred_idx_matches in event_matches.items():
             if len(pred_idx_matches) == 0:
                 FN += 1
+                fns.append({'series_id': series_id, 'idx': event_idx})
 
     p = TP / (TP + FP)
     r = TP / (TP + FN)
@@ -62,11 +67,12 @@ def calc_accuracy(
     else:
         f1 = 2 * p * r / (p + r)
 
-    return {
+    metrics = {
         'precision': p,
         'recall': r,
         'f1': f1,
         'TP': TP,
         'FP': FP,
-        'FN': FN
+        'FN': FN,
     }
+    return metrics, pd.DataFrame(fps), pd.DataFrame(fns)

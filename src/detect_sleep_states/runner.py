@@ -9,9 +9,9 @@ from albumentations.pytorch import ToTensorV2
 from lightning import Trainer
 from tqdm import tqdm
 
-from detect_sleep_states.classify_segment.data_module import SleepDataModule
-from detect_sleep_states.classify_segment.dataset import Label
-from detect_sleep_states.classify_segment.model import ClassifySegmentModel, \
+from detect_sleep_states.data_module import SleepDataModule
+from detect_sleep_states.dataset import Label
+from detect_sleep_states.models.model import ClassifySegmentModel, \
     DetectSleepModel
 from detect_sleep_states.util import clean_events
 
@@ -62,7 +62,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
 
     def run(self):
         preds = self._detect_sleep_segments()
-        preds = self._merge_repeated_preds(preds=preds)
+        #preds = self._merge_repeated_preds(preds=preds)
         # if self.args['mode'] == 'validate':
         #     targets = self._get_sequence_targets(preds=preds)
         # else:
@@ -152,7 +152,7 @@ class DetectSleepStatesRunner(argschema.ArgSchemaParser):
                             'pred': pred['pred']
                         })
                 preds = pd.DataFrame(preds)
-                preds = self._merge_repeated_preds(preds=preds)
+                #preds = self._merge_repeated_preds(preds=preds)
                 all_preds.append(preds)
 
                 if self.args['is_debug']:

@@ -1,10 +1,7 @@
-import tempfile
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
-from detect_sleep_states.classify_segment.metrics import calc_accuracy
+from detect_sleep_states.metrics import calc_accuracy
 
 
 def test_calc_accuracy_all_correct():
