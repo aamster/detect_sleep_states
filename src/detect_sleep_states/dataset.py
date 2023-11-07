@@ -111,10 +111,16 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             data['enmo']
         ])
 
+        hour = data['timestamp'].apply(lambda x: x.hour).values
         if sequence.shape[1] < self._sequence_length:
             sequence = np.pad(
                 sequence,
                 pad_width=((0, 0), (0, self._sequence_length - sequence.shape[1]))
+            )
+            hour = np.pad(
+                hour,
+                pad_width=(0, self._sequence_length - sequence.shape[1]),
+                constant_values=hour[-1]
             )
 
         sequence = self._transform(image=sequence)['image']
@@ -126,7 +132,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             'start': start,
             'end': start + self._sequence_length,
             'series_id': row.name,
-            'hour': data['timestamp'].apply(lambda x: x.hour).values
+            'hour': hour
         }
 
         if label is None:
