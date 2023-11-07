@@ -119,7 +119,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             )
             hour = np.pad(
                 hour,
-                pad_width=(0, self._sequence_length - sequence.shape[1]),
+                pad_width=(0, self._sequence_length - data.shape[0]),
                 constant_values=hour[-1]
             )
 
