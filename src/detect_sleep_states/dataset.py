@@ -74,11 +74,17 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         row = self._sequences.iloc[index]
+        series_data = self._series.loc[row.name]
+
         if self._is_train:
             # shifting randomly between -4 hours and +4 hours
             start = row['start'] + np.random.randint(-int(60*60*4/5),
                                                      int(60*60*4/5))
             start = max(0, start)
+
+            # preventing going past the end
+            start = min(series_data.shape[0] - self._sequence_length,
+                        start)
 
         else:
             start = row['start']
@@ -100,7 +106,6 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         else:
             label = None
 
-        series_data = self._series.loc[row.name]
         data = series_data.iloc[start:start+self._sequence_length].copy()
 
         data['timestamp'] = data['timestamp'].apply(
