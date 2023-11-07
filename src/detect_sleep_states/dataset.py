@@ -9,13 +9,15 @@ import torch.utils.data
 
 
 class Label(Enum):
-    sleep = 0
-    awake = 1
+    status_quo = 0
+    onset = 1
+    wakeup = 2
 
 
 label_id_str_map = {
-    0: 'sleep',
-    1: 'awake'
+    0: 'status_quo',
+    1: 'onset',
+    2: 'wakeup'
 }
 
 
@@ -72,57 +74,28 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         row = self._sequences.iloc[index]
-        if not is_valid_sequence(
-                seq_meta=row,
-                sequence_length=self._sequence_length):
-            raise ValueError(f'Invalid sequence: {row}')
-
         if self._is_train:
-            if row['label'] in (Label.sleep.name, Label.awake.name):
-                # Selecting a random sequence within [start,end]
-                start = np.random.choice(
-                    np.arange(row['start'],
-                              row['end'] - self._sequence_length + 1),
-                    size=1
-                )[0]
-            else:
-                # Either Onset or wakeup transition
-                # Selecting a random sequence that includes the transition
-                # index
+            # shifting randomly between -4 hours and +4 hours
+            start = row['start'] + np.random.randint(-int(60*60*4/5),
+                                                     int(60*60*4/5))
+            start = max(0, start)
 
-                # making it easier by limiting sequence to not start or end
-                # exactly on the transition, in which case it would be hard
-                # to detect
-                shift = 60
-
-                start = np.random.choice(
-                    np.arange(row['start'] - self._sequence_length + shift,
-                              row['start'] - shift),
-                    size=1
-                )[0]
         else:
             start = row['start']
 
-        if 'label' in row:
+        if self._events is not None:
             events = self._events.loc[row.name]
             events = events[(events['step'] >= start) &
                             (events['step'] <= start+self._sequence_length)]
-            if row['label'] in (Label.sleep.name, Label.awake.name):
-                label = torch.tensor([getattr(Label, row['label']).value] *
-                                     self._sequence_length, dtype=torch.long)
-            else:
-                label = torch.zeros(self._sequence_length, dtype=torch.long)
-                prev_event_idx = 0
-                for event in events.itertuples():
-                    if event.event == 'onset':
-                        before_label = Label.awake.value
-                        after_label = Label.sleep.value
-                    else:
-                        before_label = Label.sleep.value
-                        after_label = Label.awake.value
-                    label[prev_event_idx:int(event.step) - start] = before_label
-                    label[int(event.step) - start:] = after_label
-                    prev_event_idx = int(event.step) - start
+            label = torch.zeros((self._sequence_length, 3), dtype=torch.long)
+            label[:, 0] = 1
+            for event in events.itertuples():
+                label[
+                    max(0, int(event.step - start)-360):
+                    int(event.step - start)+360,
+                    getattr(Label, event.event).value] = 1
+                label[max(0, int(event.step - start)-360):
+                      int(event.step - start)+360, 0] = 0
 
         else:
             label = None
@@ -133,29 +106,27 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         data['timestamp'] = data['timestamp'].apply(
             lambda x: datetime.datetime.strptime(x, '%Y-%m-%dT%H:%M:%S%z'))
 
-        start_hour = data['timestamp'].iloc[0].hour
-
-        data = np.stack([
+        sequence = np.stack([
             data['anglez'],
             data['enmo']
         ])
 
-        if data.shape[1] < self._sequence_length:
-            data = np.pad(
-                data,
-                pad_width=((0, 0), (0, self._sequence_length - data.shape[1]))
+        if sequence.shape[1] < self._sequence_length:
+            sequence = np.pad(
+                sequence,
+                pad_width=((0, 0), (0, self._sequence_length - sequence.shape[1]))
             )
 
-        data = self._transform(image=data)['image']
+        sequence = self._transform(image=sequence)['image']
 
-        data = data.squeeze(dim=0)
+        sequence = sequence.squeeze(dim=0)
 
         data = {
-            'sequence': data,
+            'sequence': sequence,
             'start': start,
             'end': start + self._sequence_length,
             'series_id': row.name,
-            'start_hour': start_hour
+            'hour': data['timestamp'].dt.hour.values
         }
 
         if label is None:
@@ -175,7 +146,7 @@ def is_valid_sequence(seq_meta: pd.Series, sequence_length: int):
     is_valid = True
     if sequence_length > seq_meta['end'] - seq_meta['start']:
         if 'label' in seq_meta:
-            if seq_meta['label'] in (Label.sleep.name, Label.awake.name):
+            if seq_meta['label'] in ('sleep', 'awake'):
                 is_valid = False
         else:
             is_valid = False
