@@ -126,7 +126,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             'start': start,
             'end': start + self._sequence_length,
             'series_id': row.name,
-            'hour': data['timestamp'].dt.hour.values
+            'hour': data['timestamp'].apply(lambda x: x.hour).values
         }
 
         if label is None:
