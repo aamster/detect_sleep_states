@@ -96,8 +96,8 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.model = model
         self._batch_size = batch_size
 
-        self.train_dice_loss = torchmetrics.aggregation.MeanMetric()
-        self.val_dice_loss = torchmetrics.aggregation.MeanMetric()
+        self.train_dice = torchmetrics.classification.Dice(ignore_index=0)
+        self.val_dice = torchmetrics.classification.Dice(ignore_index=0)
 
         self._learning_rate = learning_rate
         self._hyperparams = hyperparams
@@ -118,33 +118,23 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
         #loss = 0.9 * dl + 0.1 * ce_loss
         loss = dl
-        self.train_dice_loss.update(loss)
 
         self.log("train_dice_loss", dl, prog_bar=True,
                  batch_size=self._batch_size)
-        self.logger.log_metrics({
-            'train_dice_loss': dl,
-        }, step=self.global_step)
-
-        # self.log("train_ce_loss", ce_loss, prog_bar=True,
-        #          batch_size=self._batch_size)
-        # self.logger.log_metrics({
-        #     'train_ce_loss': ce_loss,
-        # }, step=self.global_step)
+        self.train_dice.update(
+            preds=probs,
+            target=target.moveaxis(2, 1)
+        )
         return loss
 
     def validation_step(self, batch, batch_idx):
         data, target = batch
         logits = self.model(data['sequence'], timestamp_hour=data['hour'])
         probs = torch.softmax(logits, dim=1)
-        loss = dice_loss(
-            pred=probs.moveaxis(1, 2),  # class axis last
-            target=target
+        self.val_dice.update(
+            preds=probs,
+            target=target.moveaxis(2, 1)
         )
-        self.val_dice_loss.update(loss)
-
-        self.log('val_dice_loss', loss, on_epoch=True, prog_bar=True,
-                 batch_size=self._batch_size)
 
     def predict_step(
             self,
@@ -199,14 +189,14 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.logger.log_hyperparams(params=self._hyperparams)
 
     def on_train_epoch_end(self) -> None:
-        self.log('train_dice_loss', self.train_dice_loss.compute().item(),
+        self.log('train_dice', self.train_dice.compute(),
                  on_epoch=True, batch_size=self._batch_size)
-        self.train_dice_loss.reset()
+        self.train_dice.reset()
 
     def on_validation_epoch_end(self) -> None:
-        self.log('val_dice_loss', self.val_dice_loss.compute().item(), on_epoch=True,
+        self.log('val_dice', self.val_dice.compute(),
                  batch_size=self._batch_size)
-        self.val_dice_loss.reset()
+        self.val_dice.reset()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self._learning_rate)
