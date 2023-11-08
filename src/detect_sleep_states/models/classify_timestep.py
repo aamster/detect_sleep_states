@@ -190,7 +190,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def on_train_epoch_end(self) -> None:
         self.log('train_dice', self.train_dice.compute(),
-                 on_epoch=True, batch_size=self._batch_size)
+                 batch_size=self._batch_size)
         self.train_dice.reset()
 
     def on_validation_epoch_end(self) -> None:
