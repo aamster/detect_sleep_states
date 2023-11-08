@@ -77,9 +77,9 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         series_data = self._series.loc[row.name]
 
         if self._is_train:
-            # shifting randomly between -4 hours and +4 hours
-            start = row['start'] + np.random.randint(-int(60*60*4/5),
-                                                     int(60*60*4/5))
+            # shifting randomly between -2 hours and +2 hours
+            start = row['start'] + np.random.randint(-int(60*60*2/5),
+                                                     int(60*60*2/5))
             start = max(0, start)
 
             # preventing going past the end
