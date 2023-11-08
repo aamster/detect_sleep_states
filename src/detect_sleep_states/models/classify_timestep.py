@@ -96,8 +96,14 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.model = model
         self._batch_size = batch_size
 
-        self.train_dice = torchmetrics.classification.Dice(ignore_index=0)
-        self.val_dice = torchmetrics.classification.Dice(ignore_index=0)
+        self.train_dice = torchmetrics.classification.Dice(
+            ignore_index=0,
+            num_classes=3
+        )
+        self.val_dice = torchmetrics.classification.Dice(
+            ignore_index=0,
+            num_classes=3
+        )
 
         self._learning_rate = learning_rate
         self._hyperparams = hyperparams
@@ -111,9 +117,10 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
             target=target
         )
 
-        # flattened_target = torch.zeros(target.shape[:-1], dtype=torch.long)
-        # for c in range(target.shape[-1]):
-        #     flattened_target[torch.where(target[:, :, c] == 1)] = c
+        flattened_preds, flattened_target = self._flatten_preds_and_targets(
+            probs=probs,
+            target=target
+        )
         # ce_loss = CrossEntropyLoss()(logits, flattened_target)
 
         #loss = 0.9 * dl + 0.1 * ce_loss
@@ -122,8 +129,8 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.log("train_dice_loss", dl, prog_bar=True,
                  batch_size=self._batch_size)
         self.train_dice.update(
-            preds=probs,
-            target=target.moveaxis(2, 1)
+            preds=flattened_preds,
+            target=flattened_target
         )
         return loss
 
@@ -131,10 +138,28 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         data, target = batch
         logits = self.model(data['sequence'], timestamp_hour=data['hour'])
         probs = torch.softmax(logits, dim=1)
-        self.val_dice.update(
-            preds=probs,
-            target=target.moveaxis(2, 1)
+
+        flattened_preds, flattened_target = self._flatten_preds_and_targets(
+            probs=probs,
+            target=target
         )
+
+        self.val_dice.update(
+            preds=flattened_preds,
+            target=flattened_target
+        )
+
+    @staticmethod
+    def _flatten_preds_and_targets(probs, target, threshold=0.5):
+        flattened_target = torch.zeros(target.shape[:-1], dtype=torch.long)
+        for c in range(target.shape[-1]):
+            flattened_target[torch.where(target[:, :, c] == 1)] = c
+
+        flattened_preds = torch.zeros((probs.shape[0], probs.shape[-1]),
+                                      dtype=torch.long)
+        for c in range(probs.shape[1]):
+            flattened_preds[torch.where(probs[:, c] > threshold)] = c
+        return flattened_preds, flattened_target
 
     def predict_step(
             self,
