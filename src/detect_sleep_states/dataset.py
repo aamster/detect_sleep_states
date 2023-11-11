@@ -94,7 +94,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             start = row['start']
 
         if self._events is not None:
-            events = self._events.loc[row.name]
+            events = self._events.loc[[row.name]]
 
             events = events[
                 ((events['start'] >= start) &
