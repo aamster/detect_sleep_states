@@ -129,12 +129,15 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     @staticmethod
     def _flatten_preds_and_targets(probs, target, threshold=0.5):
-        flattened_target = torch.zeros(target.shape[:-1], dtype=torch.long)
+        flattened_target = torch.zeros(target.shape[:-1], dtype=torch.long,
+                                       device=target.device)
         for c in range(target.shape[-1]):
             flattened_target[torch.where(target[:, :, c] == 1)] = c
 
         flattened_preds = torch.zeros((probs.shape[0], probs.shape[-1]),
-                                      dtype=torch.long)
+                                      dtype=torch.long,
+                                      device=probs.device
+                                      )
         for c in range(probs.shape[1]):
             flattened_preds[torch.where(probs[:, c] > threshold)] = c
         return flattened_preds, flattened_target
