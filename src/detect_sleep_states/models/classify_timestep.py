@@ -104,7 +104,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
         loss = self.train_ce_loss(logits, flattened_target)
 
-        self.log("train_ce_loss", loss, prog_bar=True,
+        self.log("train_ce_loss", loss,
                  batch_size=self._batch_size)
         self.train_f1.update(
             preds=flattened_preds,
