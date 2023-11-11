@@ -65,25 +65,6 @@ class SamePaddingTimestepPredictor1dCNN(nn.Module):
         return x
 
 
-def dice_loss(
-    pred: torch.tensor,
-    target: torch.tensor,
-    epsilon=1e-6,
-    ignore_index=0
-):
-    # skip the batch and class axis for calculating Dice score
-    axes = tuple(range(1, len(pred.shape) - 1))
-
-    numerator = 2 * (pred * target).sum(dim=axes)
-    denominator = (pred + target).sum(dim=axes)
-
-    # average over classes and batch
-    loss = 1 - ((numerator[:, ignore_index+1:] + epsilon) /
-                (denominator[:, ignore_index+1:] + epsilon)).mean()
-
-    return loss
-
-
 class ClassifyTimestepModel(lightning.pytorch.LightningModule):
     def __init__(
         self,
@@ -96,13 +77,16 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.model = model
         self._batch_size = batch_size
 
-        self.train_dice = torchmetrics.classification.Dice(
-            ignore_index=0,
-            num_classes=3
+        self.train_ce_loss = CrossEntropyLoss(
+            weight=torch.tensor([0.9, 0.54, 0.55, 7.8, 7.8])
         )
-        self.val_dice = torchmetrics.classification.Dice(
-            ignore_index=0,
-            num_classes=3
+        self.train_f1 = torchmetrics.classification.MulticlassF1Score(
+            num_classes=len(Label),
+            average='none'
+        )
+        self.val_f1 = torchmetrics.classification.MulticlassF1Score(
+            num_classes=len(Label),
+            average='none'
         )
 
         self._learning_rate = learning_rate
@@ -112,23 +96,17 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         data, target = batch
         logits = self.model(x=data['sequence'], timestamp_hour=data['hour'])
         probs = torch.softmax(logits, dim=1)
-        dl = dice_loss(
-            pred=probs.moveaxis(1, 2),  # class axis last
-            target=target
-        )
 
         flattened_preds, flattened_target = self._flatten_preds_and_targets(
             probs=probs,
             target=target
         )
-        # ce_loss = CrossEntropyLoss()(logits, flattened_target)
 
-        #loss = 0.9 * dl + 0.1 * ce_loss
-        loss = dl
+        loss = self.train_ce_loss(logits, flattened_target)
 
-        self.log("train_dice_loss", dl, prog_bar=True,
+        self.log("train_ce_loss", loss, prog_bar=True,
                  batch_size=self._batch_size)
-        self.train_dice.update(
+        self.train_f1.update(
             preds=flattened_preds,
             target=flattened_target
         )
@@ -144,7 +122,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
             target=target
         )
 
-        self.val_dice.update(
+        self.val_f1.update(
             preds=flattened_preds,
             target=flattened_target
         )
@@ -214,14 +192,28 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.logger.log_hyperparams(params=self._hyperparams)
 
     def on_train_epoch_end(self) -> None:
-        self.log('train_dice', self.train_dice.compute(),
+        f1 = self.train_f1.compute()
+        f1 = f1[3:]
+
+        self.log('train_f1', f1.mean(),
                  batch_size=self._batch_size)
-        self.train_dice.reset()
+        self.log('train_onset_f1', f1[0],
+                 batch_size=self._batch_size)
+        self.log('train_wakeup_f1', f1[1],
+                 batch_size=self._batch_size)
+        self.train_f1.reset()
 
     def on_validation_epoch_end(self) -> None:
-        self.log('val_dice', self.val_dice.compute(),
+        f1 = self.val_f1.compute()
+        f1 = f1[3:]
+
+        self.log('val_f1', f1.mean(),
                  batch_size=self._batch_size)
-        self.val_dice.reset()
+        self.log('val_onset_f1', f1[0],
+                 batch_size=self._batch_size)
+        self.log('val_wakeup_f1', f1[1],
+                 batch_size=self._batch_size)
+        self.val_f1.reset()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self._learning_rate)

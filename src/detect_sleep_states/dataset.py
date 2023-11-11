@@ -9,15 +9,19 @@ import torch.utils.data
 
 
 class Label(Enum):
-    status_quo = 0
-    onset = 1
-    wakeup = 2
+    sleep = 0
+    awake = 1
+    missing = 2
+    onset = 3
+    wakeup = 4
 
 
 label_id_str_map = {
-    0: 'status_quo',
-    1: 'onset',
-    2: 'wakeup'
+    0: 'sleep',
+    1: 'awake',
+    2: 'missing',
+    3: 'onset',
+    4: 'wakeup'
 }
 
 
@@ -91,18 +95,30 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
 
         if self._events is not None:
             events = self._events.loc[row.name]
-            events = events[(events['step'] >= start) &
-                            (events['step'] <= start+self._sequence_length)]
-            label = torch.zeros((self._sequence_length, 3), dtype=torch.long)
-            label[:, 0] = 1
-            for event in events.itertuples():
-                label[
-                    max(0, int(event.step - start)-360):
-                    int(event.step - start)+360,
-                    getattr(Label, event.event).value] = 1
-                label[max(0, int(event.step - start)-360):
-                      int(event.step - start)+360, 0] = 0
 
+            events = events[
+                ((events['start'] >= start) &
+                 (events['start'] <= start + self._sequence_length)) |
+                (events['start'] <= start) &
+                (events['end'] >= start)]
+            label = torch.zeros((self._sequence_length, len(Label)),
+                                dtype=torch.long)
+            for event in events.itertuples():
+                event_start = int(max(start, event.start))
+                event_end = int(min(start + self._sequence_length, event.end))
+
+                if event.event in (Label.onset.name, Label.wakeup.name):
+                    event_start = max(0, int(event_start - start)-360)
+                    event_end = int(event_end - start)+360
+                else:
+                    event_start = int(event_start - start)
+                    event_end = int(event_end - start)
+
+                label[event_start:event_end,
+                      getattr(Label, event.event).value] = 1
+
+            label[torch.where(label[:, Label.onset.value] == 1)[0], :3] = 0
+            label[torch.where(label[:, Label.wakeup.value] == 1)[0], :3] = 0
         else:
             label = None
 
