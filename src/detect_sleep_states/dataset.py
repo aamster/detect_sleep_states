@@ -9,19 +9,15 @@ import torch.utils.data
 
 
 class Label(Enum):
-    sleep = 0
-    awake = 1
-    missing = 2
-    onset = 3
-    wakeup = 4
+    background = 0
+    onset = 1
+    wakeup = 2
 
 
 label_id_str_map = {
-    0: 'sleep',
-    1: 'awake',
-    2: 'missing',
-    3: 'onset',
-    4: 'wakeup'
+    0: 'background',
+    1: 'onset',
+    2: 'wakeup'
 }
 
 
@@ -110,15 +106,16 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
                 if event.event in (Label.onset.name, Label.wakeup.name):
                     event_start = max(0, int(event_start - start)-360)
                     event_end = int(event_end - start)+360
+                    event_index = getattr(Label, event.event).value
                 else:
                     event_start = int(event_start - start)
                     event_end = int(event_end - start)
+                    event_index = 0
 
-                label[event_start:event_end,
-                      getattr(Label, event.event).value] = 1
+                label[event_start:event_end, event_index] = 1
 
-            label[torch.where(label[:, Label.onset.value] == 1)[0], :3] = 0
-            label[torch.where(label[:, Label.wakeup.value] == 1)[0], :3] = 0
+            label[torch.where(label[:, Label.onset.value] == 1)[0], 0] = 0
+            label[torch.where(label[:, Label.wakeup.value] == 1)[0], 0] = 0
         else:
             label = None
 
