@@ -78,7 +78,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self._batch_size = batch_size
 
         self.train_ce_loss = CrossEntropyLoss(
-            weight=torch.tensor([0.35, 13.0, 13.0])
+            weight=torch.tensor([0.9, 0.54, 0.55, 7.8, 7.8])
         )
         self.train_f1 = torchmetrics.classification.MulticlassF1Score(
             num_classes=len(Label),
@@ -104,7 +104,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
         loss = self.train_ce_loss(logits, flattened_target)
 
-        self.log("train_ce_loss", loss, prog_bar=True,
+        self.log("train_ce_loss", loss,
                  batch_size=self._batch_size)
         self.train_f1.update(
             preds=flattened_preds,
@@ -196,7 +196,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def on_train_epoch_end(self) -> None:
         f1 = self.train_f1.compute()
-        f1 = f1[1:]
+        f1 = f1[3:]
 
         self.log('train_f1', f1.mean(),
                  batch_size=self._batch_size)
@@ -208,7 +208,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         f1 = self.val_f1.compute()
-        f1 = f1[1:]
+        f1 = f1[3:]
 
         self.log('val_f1', f1.mean(),
                  batch_size=self._batch_size)
