@@ -1,10 +1,13 @@
 from typing import Dict, Any
 
 import lightning
+import numpy as np
 import torch
 import torchmetrics
+from skimage.morphology import binary_dilation
 from torch import nn
 from torch.nn import CrossEntropyLoss
+import torch.nn.functional as F
 from torchvision.ops.misc import ConvNormActivation
 
 from detect_sleep_states.dataset import label_id_str_map, Label
@@ -71,11 +74,13 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         learning_rate,
         model: torch.nn.Module,
         hyperparams: Dict,
-        batch_size: int
+        batch_size: int,
+        return_raw_preds: bool = False
     ):
         super().__init__()
         self.model = model
         self._batch_size = batch_size
+        self._return_raw_preds = return_raw_preds
 
         self.train_ce_loss = CrossEntropyLoss(
             weight=torch.tensor([0.9, 0.54, 0.55, 7.8, 7.8])
@@ -104,7 +109,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
         loss = self.train_ce_loss(logits, flattened_target)
 
-        self.log("train_ce_loss", loss,
+        self.log("train_ce_loss", loss, prog_bar=True,
                  batch_size=self._batch_size)
         self.train_f1.update(
             preds=flattened_preds,
@@ -154,39 +159,48 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
             data = batch
         logits = self.model(data['sequence'], timestamp_hour=data['hour'])
         preds = torch.argmax(logits, dim=1)
+        preds_one_hot = F.one_hot(preds, num_classes=len(Label))
 
+        if self._return_raw_preds:
+            return data['sequence'], preds
         # Taking the raw preds which can contain multiple contiguous e.g.
         # wakeup predictions and finding the middle, then converting to
         # a global index
         preds_output = []
         for pred_idx in range(preds.shape[0]):
             pred_output = []
-            i = 0
-            while i < preds.shape[1]:
-                pred = preds[pred_idx][i]
-                start = i
-                while i < preds.shape[1] and preds[pred_idx][i] == pred:
-                    i += 1
-                end = i
-                if pred == Label.onset.value:
-                    pred = Label.onset.name
-                elif pred == Label.wakeup.value:
-                    pred = Label.wakeup.name
-                else:
-                    continue
-                # taking average over a sequence of the same block
-                # e.g. multiple contiguous onset predictions, take the
-                # average idx over the block length
-                step_local = start + int((end - start) / 2)
+            for label in (Label.onset, Label.wakeup):
+                label_preds = preds_one_hot[pred_idx][:, label.value]
+                label_preds = torch.tensor(binary_dilation(label_preds, footprint=np.ones(360)))
+                idxs = torch.where(label_preds == 1)[0]
 
-                # convert to global sequence idx
-                step = data['start'][pred_idx] + step_local
+                i = 0
+                while i < len(idxs):
+                    start = i
+                    prev_idx = idxs[i]
+                    while (i < len(idxs) and
+                           (idxs[i] == prev_idx or idxs[i] == prev_idx + 1)):
+                        prev_idx = idxs[i]
+                        i += 1
+                    end = i
 
-                pred_output.append({
-                    'series_id': data['series_id'][pred_idx],
-                    'event': pred,
-                    'step': step.item()
-                })
+                    # taking average over a sequence of the same block
+                    # e.g. multiple contiguous onset predictions, take the
+                    # average idx over the block length
+                    step_local = idxs[start] + int((idxs[end-1] - idxs[start]) / 2)
+
+                    # convert to global sequence idx
+                    step = data['start'][pred_idx] + step_local
+
+                    pred_output.append({
+                        'series_id': data['series_id'][pred_idx],
+                        'event': label.name,
+                        'step': step.item(),
+                        'local_start': idxs[start].item(),
+                        'local_end': idxs[end-1].item(),
+                        'start': (data['start'][pred_idx] + idxs[start]).item(),
+                        'end': (data['start'][pred_idx] + idxs[end - 1]).item()
+                    })
             preds_output.append(pred_output)
 
         return preds_output
