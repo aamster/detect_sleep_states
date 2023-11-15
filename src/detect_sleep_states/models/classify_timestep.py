@@ -158,6 +158,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         else:
             data = batch
         logits = self.model(data['sequence'], timestamp_hour=data['hour'])
+        scores = torch.softmax(logits, dim=1)
         preds = torch.argmax(logits, dim=1)
         preds_one_hot = F.one_hot(preds, num_classes=len(Label))
 
@@ -170,9 +171,18 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         for pred_idx in range(preds.shape[0]):
             pred_output = []
             for label in (Label.onset, Label.wakeup):
-                label_preds = preds_one_hot[pred_idx][:, label.value]
-                label_preds = torch.tensor(binary_dilation(label_preds, footprint=np.ones(360)))
-                idxs = torch.where(label_preds == 1)[0]
+                # Truncating, in case sequence extends past the actual data
+                # and needed to be padded
+                preds_one_hot_possibly_truncated = \
+                    preds_one_hot[pred_idx][:data['sequence_length'][pred_idx]]
+
+                label_preds = preds_one_hot_possibly_truncated[:, label.value]
+
+                # Dilating since there can be gaps in the block
+                label_preds_dilated = torch.tensor(binary_dilation(
+                    label_preds, footprint=np.ones(360)))
+
+                idxs = torch.where(label_preds_dilated == 1)[0]
 
                 i = 0
                 while i < len(idxs):
@@ -192,10 +202,15 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                     # convert to global sequence idx
                     step = data['start'][pred_idx] + step_local
 
+                    # Limiting the score idxs to only those that had the label
+                    # before dilation
+                    score_idxs = idxs[start:end-1][torch.where(label_preds[idxs[start:end-1]])]
+
                     pred_output.append({
                         'series_id': data['series_id'][pred_idx],
                         'event': label.name,
                         'step': step.item(),
+                        'score': scores[pred_idx][label.value, score_idxs].mean().item(),
                         'local_start': idxs[start].item(),
                         'local_end': idxs[end-1].item(),
                         'start': (data['start'][pred_idx] + idxs[start]).item(),
