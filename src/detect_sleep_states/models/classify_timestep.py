@@ -75,12 +75,14 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         model: torch.nn.Module,
         hyperparams: Dict,
         batch_size: int,
-        return_raw_preds: bool = False
+        return_raw_preds: bool = False,
+        dilation_window: int = 720
     ):
         super().__init__()
         self.model = model
         self._batch_size = batch_size
         self._return_raw_preds = return_raw_preds
+        self._dilation_window = dilation_window
 
         self.train_ce_loss = CrossEntropyLoss(
             weight=torch.tensor([0.9, 0.54, 0.55, 7.8, 7.8])
@@ -180,7 +182,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
                 # Dilating since there can be gaps in the block
                 label_preds_dilated = torch.tensor(binary_dilation(
-                    label_preds, footprint=np.ones(360)))
+                    label_preds, footprint=np.ones(self._dilation_window)))
 
                 idxs = torch.where(label_preds_dilated == 1)[0]
 
