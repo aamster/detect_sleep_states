@@ -223,13 +223,13 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                             Label.awake.name if label == Label.onset.name
                             else Label.sleep.name)
 
-                        if preds[start-1] != expected_prev_label:
+                        if preds[pred_idx][start-1] != expected_prev_label:
                             continue
                     if end < len(idxs) - 1:
                         expected_next_label = (
                             Label.sleep.name if label == Label.onset.name
                             else Label.awake.name)
-                        if preds[end] != expected_next_label:
+                        if preds[pred_idx][end] != expected_next_label:
                             continue
 
                     pred_output.append({
