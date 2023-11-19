@@ -218,18 +218,18 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
                     # We expect the pattern onset sleep wakeup awake onset
                     # if it is something else, exclude the prediction
-                    if start > 0:
+                    if idxs[start] > 0:
                         expected_prev_label = (
                             Label.awake.value if label == Label.onset
                             else Label.sleep.value)
 
-                        if preds[pred_idx][start-1] != expected_prev_label:
+                        if preds[pred_idx][idxs[start]-1] != expected_prev_label:
                             continue
-                    if end < len(idxs) - 1:
+                    if idxs[end-1] < preds.shape[1] - 1:
                         expected_next_label = (
                             Label.sleep.value if label == Label.onset
                             else Label.awake.value)
-                        if preds[pred_idx][end] != expected_next_label:
+                        if preds[pred_idx][idxs[end-1]+1] != expected_next_label:
                             continue
 
                     pred_output.append({
