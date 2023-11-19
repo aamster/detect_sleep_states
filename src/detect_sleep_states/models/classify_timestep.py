@@ -136,10 +136,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     @staticmethod
     def _flatten_preds_and_targets(probs, target, threshold=0.5):
-        flattened_target = torch.zeros(target.shape[:-1], dtype=torch.long,
-                                       device=target.device)
-        for c in range(target.shape[-1]):
-            flattened_target[torch.where(target[:, :, c] == 1)] = c
+        flattened_target = ClassifyTimestepModel.flatten_targets(target=target)
 
         flattened_preds = torch.zeros((probs.shape[0], probs.shape[-1]),
                                       dtype=torch.long,
@@ -148,6 +145,14 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         for c in range(probs.shape[1]):
             flattened_preds[torch.where(probs[:, c] > threshold)] = c
         return flattened_preds, flattened_target
+
+    @staticmethod
+    def flatten_targets(target):
+        flattened_target = torch.zeros(target.shape[:-1], dtype=torch.long,
+                                       device=target.device)
+        for c in range(target.shape[-1]):
+            flattened_target[torch.where(target[:, :, c] == 1)] = c
+        return flattened_target
 
     def predict_step(
             self,
@@ -186,6 +191,9 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
                 idxs = torch.where(label_preds_dilated == 1)[0]
 
+                if len(idxs) == 0:
+                    continue
+
                 i = 0
                 while i < len(idxs):
                     start = i
@@ -206,7 +214,23 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
                     # Limiting the score idxs to only those that had the label
                     # before dilation
-                    score_idxs = idxs[start:end-1][torch.where(label_preds[idxs[start:end-1]])]
+                    score_idxs = idxs[start:end][torch.where(label_preds[idxs[start:end]])]
+
+                    # We expect the pattern onset sleep wakeup awake onset
+                    # if it is something else, exclude the prediction
+                    if start > 0:
+                        expected_prev_label = (
+                            Label.awake.name if label == Label.onset.name
+                            else Label.sleep.name)
+
+                        if preds[start-1] != expected_prev_label:
+                            continue
+                    if end < len(idxs) - 1:
+                        expected_next_label = (
+                            Label.sleep.name if label == Label.onset.name
+                            else Label.awake.name)
+                        if preds[end] != expected_next_label:
+                            continue
 
                     pred_output.append({
                         'series_id': data['series_id'][pred_idx],
