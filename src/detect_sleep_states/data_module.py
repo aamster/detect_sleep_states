@@ -131,3 +131,7 @@ class SleepDataModule(lightning.LightningDataModule):
     @property
     def train(self) -> ClassifySegmentDataset:
         return self._train
+
+    @property
+    def val(self) -> ClassifySegmentDataset:
+        return self._val
