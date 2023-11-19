@@ -220,15 +220,15 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                     # if it is something else, exclude the prediction
                     if start > 0:
                         expected_prev_label = (
-                            Label.awake.name if label == Label.onset.name
-                            else Label.sleep.name)
+                            Label.awake.value if label == Label.onset
+                            else Label.sleep.value)
 
                         if preds[pred_idx][start-1] != expected_prev_label:
                             continue
                     if end < len(idxs) - 1:
                         expected_next_label = (
-                            Label.sleep.name if label == Label.onset.name
-                            else Label.awake.name)
+                            Label.sleep.value if label == Label.onset
+                            else Label.awake.value)
                         if preds[pred_idx][end] != expected_next_label:
                             continue
 
