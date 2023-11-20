@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Literal
 
 import lightning
 import numpy as np
@@ -78,7 +78,8 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         return_raw_preds: bool = False,
         dilation_window: int = 720,
         dilate_prediction_blocks: bool = True,
-        exclude_invalid_predictions: bool = False
+        exclude_invalid_predictions: bool = False,
+        step_prediction_method: Literal['max_score', 'middle'] = 'middle'
     ):
         super().__init__()
         self.model = model
@@ -87,6 +88,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self._dilation_window = dilation_window
         self._dilate_prediction_blocks = dilate_prediction_blocks
         self._exclude_invalid_predictions = exclude_invalid_predictions
+        self._step_prediction_method = step_prediction_method
 
         self.train_ce_loss = CrossEntropyLoss(
             weight=torch.tensor([0.9, 0.54, 0.55, 7.8, 7.8])
@@ -179,13 +181,13 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         # wakeup predictions and finding the middle, then converting to
         # a global index
         preds_output = []
-        for pred_idx in range(preds.shape[0]):
+        for batch_idx in range(preds.shape[0]):
             pred_output = []
             for label in (Label.onset, Label.wakeup):
                 # Truncating, in case sequence extends past the actual data
                 # and needed to be padded
                 preds_one_hot_possibly_truncated = \
-                    preds_one_hot[pred_idx][:data['sequence_length'][pred_idx]]
+                    preds_one_hot[batch_idx][:data['sequence_length'][batch_idx]]
 
                 label_preds = preds_one_hot_possibly_truncated[:, label.value]
 
@@ -212,17 +214,25 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                         i += 1
                     end = i
 
-                    # taking average over a sequence of the same block
-                    # e.g. multiple contiguous onset predictions, take the
-                    # average idx over the block length
-                    step_local = idxs[start] + int((idxs[end-1] - idxs[start]) / 2)
+                    if self._step_prediction_method == 'max_score':
+                        # Limiting the score idxs to only those that had the label
+                        # before dilation
+                        score_idxs = idxs[start:end][torch.where(label_preds[idxs[start:end]])]
+
+                        # The step is the most confident step in the block
+                        step_local = score_idxs[scores[batch_idx][label.value, score_idxs].argmax()]
+                    elif self._step_prediction_method == 'middle':
+                        # taking average over a sequence of the same block
+                        # e.g. multiple contiguous onset predictions, take the
+                        # average idx over the block length
+                        step_local = idxs[start] + int(
+                            (idxs[end - 1] - idxs[start]) / 2)
+                    else:
+                        raise ValueError(f'Unkown step_prediction_method '
+                                         f'{self._step_prediction_method}')
 
                     # convert to global sequence idx
-                    step = data['start'][pred_idx] + step_local
-
-                    # Limiting the score idxs to only those that had the label
-                    # before dilation
-                    score_idxs = idxs[start:end][torch.where(label_preds[idxs[start:end]])]
+                    step = data['start'][batch_idx] + step_local
 
                     if self._exclude_invalid_predictions:
                         # We expect the pattern onset sleep wakeup awake onset
@@ -232,24 +242,24 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                                 Label.awake.value if label == Label.onset
                                 else Label.sleep.value)
 
-                            if preds[pred_idx][idxs[start]-1] != expected_prev_label:
+                            if preds[batch_idx][idxs[start]-1] != expected_prev_label:
                                 continue
                         if idxs[end-1] < preds.shape[1] - 1:
                             expected_next_label = (
                                 Label.sleep.value if label == Label.onset
                                 else Label.awake.value)
-                            if preds[pred_idx][idxs[end-1]+1] != expected_next_label:
+                            if preds[batch_idx][idxs[end-1]+1] != expected_next_label:
                                 continue
 
                     pred_output.append({
-                        'series_id': data['series_id'][pred_idx],
+                        'series_id': data['series_id'][batch_idx],
                         'event': label.name,
                         'step': step.item(),
-                        'score': scores[pred_idx][label.value, score_idxs].mean().item(),
+                        'score': scores[batch_idx][label.value, score_idxs].mean().item(),
                         'local_start': idxs[start].item(),
                         'local_end': idxs[end-1].item(),
-                        'start': (data['start'][pred_idx] + idxs[start]).item(),
-                        'end': (data['start'][pred_idx] + idxs[end - 1]).item()
+                        'start': (data['start'][batch_idx] + idxs[start]).item(),
+                        'end': (data['start'][batch_idx] + idxs[end - 1]).item()
                     })
             preds_output.append(pred_output)
 
