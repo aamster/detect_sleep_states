@@ -214,11 +214,12 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                         i += 1
                     end = i
 
-                    if self._step_prediction_method == 'max_score':
-                        # Limiting the score idxs to only those that had the label
-                        # before dilation
-                        score_idxs = idxs[start:end][torch.where(label_preds[idxs[start:end]])]
+                    # Limiting the score idxs to only those that had the label
+                    # before dilation
+                    score_idxs = idxs[start:end][
+                        torch.where(label_preds[idxs[start:end]])]
 
+                    if self._step_prediction_method == 'max_score':
                         # The step is the most confident step in the block
                         step_local = score_idxs[scores[batch_idx][label.value, score_idxs].argmax()]
                     elif self._step_prediction_method == 'middle':
