@@ -76,13 +76,17 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         hyperparams: Dict,
         batch_size: int,
         return_raw_preds: bool = False,
-        dilation_window: int = 720
+        dilation_window: int = 720,
+        dilate_prediction_blocks: bool = True,
+        exclude_invalid_predictions: bool = False
     ):
         super().__init__()
         self.model = model
         self._batch_size = batch_size
         self._return_raw_preds = return_raw_preds
         self._dilation_window = dilation_window
+        self._dilate_prediction_blocks = dilate_prediction_blocks
+        self._exclude_invalid_predictions = exclude_invalid_predictions
 
         self.train_ce_loss = CrossEntropyLoss(
             weight=torch.tensor([0.9, 0.54, 0.55, 7.8, 7.8])
@@ -185,9 +189,13 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
                 label_preds = preds_one_hot_possibly_truncated[:, label.value]
 
-                # Dilating since there can be gaps in the block
-                label_preds_dilated = torch.tensor(binary_dilation(
-                    label_preds, footprint=np.ones(self._dilation_window)))
+                if self._dilate_prediction_blocks:
+                    # Dilating since there can be gaps in the block
+                    label_preds_dilated = torch.tensor(binary_dilation(
+                        label_preds.cpu(), footprint=np.ones(self._dilation_window)),
+                        device=preds.device)
+                else:
+                    label_preds_dilated = label_preds
 
                 idxs = torch.where(label_preds_dilated == 1)[0]
 
@@ -216,21 +224,22 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                     # before dilation
                     score_idxs = idxs[start:end][torch.where(label_preds[idxs[start:end]])]
 
-                    # We expect the pattern onset sleep wakeup awake onset
-                    # if it is something else, exclude the prediction
-                    if idxs[start] > 0:
-                        expected_prev_label = (
-                            Label.awake.value if label == Label.onset
-                            else Label.sleep.value)
+                    if self._exclude_invalid_predictions:
+                        # We expect the pattern onset sleep wakeup awake onset
+                        # if it is something else, exclude the prediction
+                        if idxs[start] > 0:
+                            expected_prev_label = (
+                                Label.awake.value if label == Label.onset
+                                else Label.sleep.value)
 
-                        if preds[pred_idx][idxs[start]-1] != expected_prev_label:
-                            continue
-                    if idxs[end-1] < preds.shape[1] - 1:
-                        expected_next_label = (
-                            Label.sleep.value if label == Label.onset
-                            else Label.awake.value)
-                        if preds[pred_idx][idxs[end-1]+1] != expected_next_label:
-                            continue
+                            if preds[pred_idx][idxs[start]-1] != expected_prev_label:
+                                continue
+                        if idxs[end-1] < preds.shape[1] - 1:
+                            expected_next_label = (
+                                Label.sleep.value if label == Label.onset
+                                else Label.awake.value)
+                            if preds[pred_idx][idxs[end-1]+1] != expected_next_label:
+                                continue
 
                     pred_output.append({
                         'series_id': data['series_id'][pred_idx],
