@@ -1,71 +1,11 @@
 from typing import Dict, Any, Literal
 
 import lightning
-import numpy as np
 import torch
 import torchmetrics
-from skimage.morphology import binary_dilation
-from torch import nn
 from torch.nn import CrossEntropyLoss
-import torch.nn.functional as F
-from torchvision.ops.misc import ConvNormActivation
 
-from detect_sleep_states.dataset import label_id_str_map, Label
-
-
-class SamePaddingTimestepPredictor1dCNN(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.encoder = nn.Sequential(
-            ConvNormActivation(
-                in_channels=2,
-                out_channels=64,
-                kernel_size=49,
-                bias=False,
-                norm_layer=nn.BatchNorm1d,
-                conv_layer=nn.Conv1d,
-                stride=1,
-                padding='same'
-            ),
-            ConvNormActivation(
-                in_channels=64,
-                out_channels=128,
-                kernel_size=49,
-                bias=False,
-                norm_layer=nn.BatchNorm1d,
-                conv_layer=nn.Conv1d,
-                stride=1,
-                padding='same'
-            ),
-            ConvNormActivation(
-                in_channels=128,
-                out_channels=256,
-                kernel_size=49,
-                bias=False,
-                norm_layer=nn.BatchNorm1d,
-                conv_layer=nn.Conv1d,
-                stride=1,
-                padding='same'
-            )
-        )
-
-        self.classifier = nn.Conv1d(
-            in_channels=256+24,
-            out_channels=len(label_id_str_map),
-            kernel_size=1
-        )
-
-    def forward(self, x, start_hour):
-        x = self.encoder(x)
-
-        start_hour = nn.functional.one_hot(start_hour.long(), num_classes=24)
-        start_hour = start_hour.unsqueeze(2).repeat(1, 1, x.shape[-1])
-
-        x = torch.cat([x, start_hour], 1)
-        x = self.classifier(x)
-
-        return x
+from detect_sleep_states.dataset import Label
 
 
 class ClassifyTimestepModel(lightning.pytorch.LightningModule):
@@ -76,8 +16,8 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         hyperparams: Dict,
         batch_size: int,
         return_raw_preds: bool = False,
-        dilation_window: int = 720,
-        dilate_prediction_blocks: bool = True,
+        small_gap_threshold: int = 720,
+        fill_small_gaps: bool = True,
         exclude_invalid_predictions: bool = False,
         step_prediction_method: Literal['max_score', 'middle'] = 'middle'
     ):
@@ -85,8 +25,8 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.model = model
         self._batch_size = batch_size
         self._return_raw_preds = return_raw_preds
-        self._dilation_window = dilation_window
-        self._dilate_prediction_blocks = dilate_prediction_blocks
+        self._small_gap_threshold = small_gap_threshold
+        self._fill_small_gaps = fill_small_gaps
         self._exclude_invalid_predictions = exclude_invalid_predictions
         self._step_prediction_method = step_prediction_method
 
@@ -173,7 +113,6 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         logits = self.model(data['sequence'], timestamp_hour=data['hour'])
         scores = torch.softmax(logits, dim=1)
         preds = torch.argmax(logits, dim=1)
-        preds_one_hot = F.one_hot(preds, num_classes=len(Label))
 
         if self._return_raw_preds:
             return data['sequence'], preds
@@ -186,20 +125,16 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
             for label in (Label.onset, Label.wakeup):
                 # Truncating, in case sequence extends past the actual data
                 # and needed to be padded
-                preds_one_hot_possibly_truncated = \
-                    preds_one_hot[batch_idx][:data['sequence_length'][batch_idx]]
+                preds_possibly_truncated = \
+                    preds[batch_idx][:data['sequence_length'][batch_idx]]
 
-                label_preds = preds_one_hot_possibly_truncated[:, label.value]
-
-                if self._dilate_prediction_blocks:
-                    # Dilating since there can be gaps in the block
-                    label_preds_dilated = torch.tensor(binary_dilation(
-                        label_preds.cpu(), footprint=np.ones(self._dilation_window)),
-                        device=preds.device)
+                if self._fill_small_gaps:
+                    preds_gaps_filled = self._fill_gaps_inference(
+                        preds=preds_possibly_truncated)
                 else:
-                    label_preds_dilated = label_preds
+                    preds_gaps_filled = preds_possibly_truncated
 
-                idxs = torch.where(label_preds_dilated == 1)[0]
+                idxs = torch.where(preds_gaps_filled == label.value)[0]
 
                 if len(idxs) == 0:
                     continue
@@ -217,7 +152,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                     # Limiting the score idxs to only those that had the label
                     # before dilation
                     score_idxs = idxs[start:end][
-                        torch.where(label_preds[idxs[start:end]])]
+                        torch.where(preds_possibly_truncated[idxs[start:end]] == label.value)]
 
                     if self._step_prediction_method == 'max_score':
                         # The step is the most confident step in the block
@@ -265,6 +200,45 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
             preds_output.append(pred_output)
 
         return preds_output
+
+    def _fill_gaps_inference(self, preds: torch.tensor):
+        """
+        Fills small gaps in the predicted output
+        :return:
+        """
+        fill_gaps_labels = [x for x in Label if x not in
+                            (Label.onset, Label.wakeup)]
+        for label in fill_gaps_labels:
+            idxs = torch.where(preds == label.value)[0]
+
+            i = 0
+            while i < len(idxs):
+                start = i
+                prev_idx = idxs[i]
+                while (i < len(idxs) and
+                       (idxs[i] == prev_idx or idxs[i] == prev_idx + 1)):
+                    prev_idx = idxs[i]
+                    i += 1
+                end = i
+
+                start = idxs[start]
+                end = idxs[end-1]
+
+                if end - start < self._small_gap_threshold:
+                    if start > 0 and end < preds.shape[0] - 1:
+                        if preds[start-1] == preds[end+1]:
+                            preds[start:end+1] = preds[start-1]
+                        elif preds[start - 1] == Label.missing.value:
+                            preds[start:end + 1] = Label.missing.value
+                        elif preds[end + 1] == Label.missing.value:
+                            preds[start:end + 1] = Label.missing.value
+                    elif start > 0:
+                        if preds[start - 1] == Label.missing.value:
+                            preds[start:end + 1] = Label.missing.value
+                    elif end < preds.shape[0] - 1:
+                        if preds[end + 1] == Label.missing.value:
+                            preds[start:end + 1] = Label.missing.value
+        return preds
 
     def on_train_start(self) -> None:
         self.logger.log_hyperparams(params=self._hyperparams)
