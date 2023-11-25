@@ -59,6 +59,16 @@ def _get_missing_sequences(
                 })
             else:
                 i += 1
+
+        # Sometimes there is more data and there are no "annotated"
+        # missing events at the end
+        if (series_events['step'].max() + 10000 < series_lengths[series_id] and not
+            pd.isna(series_events.iloc[-1]['step'])):
+            missing.append({
+                'series_id': series_id,
+                'start': series_events['step'].max() + 10000,
+                'end': series_lengths[series_id]
+            })
     missing = pd.DataFrame(missing)
     missing = missing.set_index('series_id')
     missing = missing.sort_values(['series_id', 'start'])
