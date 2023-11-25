@@ -19,15 +19,15 @@ class CNN(UNet1D):
         with torch.no_grad():
             skip_connections, encoding = self.encoder(x)
             encoding = self.bottom_block(encoding)
-        return encoding
+            x = self.decoder(skip_connections, encoding)
+        return x
 
 
 class CNNRNN(nn.Module):
     def __init__(
         self,
         rnn_hidden_size: int,
-        cnn_weights_path: str,
-        sequence_length: int
+        cnn_weights_path: str
     ):
         super().__init__()
         cnn = CNN(
@@ -55,18 +55,17 @@ class CNNRNN(nn.Module):
 
         self.cnn = cnn
         self.rnn = nn.LSTM(
-            input_size=256,  # num channels output by CNN
+            input_size=16,  # num channels output by CNN
             hidden_size=rnn_hidden_size,
             batch_first=True
         )
         self.classifier = ConvolutionalBlock(
             dimensions=1,
-            in_channels=16 + 24,     # num channels output by RNN + hour
+            in_channels=self.rnn.hidden_size + 24,     # num channels output by RNN + hour
             out_channels=len(Label),
             kernel_size=1,
             activation=None
         )
-        self._sequence_length = sequence_length
 
     def forward(self, x, timestamp_hour: torch.tensor):
         x = self.cnn(x)
@@ -76,10 +75,13 @@ class CNNRNN(nn.Module):
 
         x, _ = self.rnn(x)
 
-        # reshape to original input size
-        x = x.reshape(x.shape[0], self._sequence_length, -1)
+        timestamp_hour = nn.functional.one_hot(timestamp_hour.long(),
+                                               num_classes=24)
+        timestamp_hour = timestamp_hour.moveaxis(2, 1)
 
+        x = x.moveaxis(2, 1)
         x = torch.cat([x, timestamp_hour], 1)
+
         x = self.classifier(x)
 
         return x
