@@ -4,8 +4,79 @@ import lightning
 import torch
 import torchmetrics
 from torch.nn import CrossEntropyLoss
+from torch import nn
+from unet import UNet1D
+from unet.conv import ConvolutionalBlock
 
 from detect_sleep_states.dataset import Label
+
+
+class CNN(UNet1D):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def forward(self, x):
+        with torch.no_grad():
+            skip_connections, encoding = self.encoder(x)
+            encoding = self.bottom_block(encoding)
+        return encoding
+
+
+class CNNRNN(nn.Module):
+    def __init__(self, rnn_hidden_size: int, cnn_weights_path: str):
+        super().__init__()
+        cnn = CNN(
+            in_channels=2,
+            out_classes=len(Label),
+            padding=1,
+            normalization='batch',
+            residual=True,
+            num_encoding_blocks=5,
+            out_channels_first_layer=16,
+            kernel_size=51
+        )
+
+        map_location = torch.device('cpu') if not torch.cuda.is_available() else None
+        cnn = ClassifyTimestepModel.load_from_checkpoint(
+            checkpoint_path=cnn_weights_path,
+            map_location=map_location,
+            learning_rate=1e-3,
+            model=cnn,
+            hyperparams={},
+            batch_size=8
+        ).model
+        for param in cnn.parameters():
+            param.requires_grad = False
+
+        self.cnn = cnn
+        self.rnn = nn.LSTM(
+            input_size=256,  # num channels output by CNN
+            hidden_size=rnn_hidden_size,
+            batch_first=True
+        )
+        self.classifier = ConvolutionalBlock(
+            dimensions=1,
+            in_channels=16 + 24,     # num channels output by RNN + hour
+            out_channels=len(Label),
+            kernel_size=1,
+            activation=None
+        )
+
+    def forward(self, x, timestamp_hour: torch.tensor):
+        x = self.cnn(x)
+
+        # Preparing for RNN (N: batch size, T: sequence length, C: number of channels)
+        x = x.permute(0, 2, 1)
+
+        x, _ = self.rnn(x)
+
+        # reshape to original input size
+        x = x.reshape(x.shape[0], 34560, -1)
+
+        x = torch.cat([x, timestamp_hour], 1)
+        x = self.classifier(x)
+
+        return x
 
 
 class ClassifyTimestepModel(lightning.pytorch.LightningModule):
