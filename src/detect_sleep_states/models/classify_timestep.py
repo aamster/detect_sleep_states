@@ -23,7 +23,12 @@ class CNN(UNet1D):
 
 
 class CNNRNN(nn.Module):
-    def __init__(self, rnn_hidden_size: int, cnn_weights_path: str):
+    def __init__(
+        self,
+        rnn_hidden_size: int,
+        cnn_weights_path: str,
+        sequence_length: int
+    ):
         super().__init__()
         cnn = CNN(
             in_channels=2,
@@ -61,6 +66,7 @@ class CNNRNN(nn.Module):
             kernel_size=1,
             activation=None
         )
+        self._sequence_length = sequence_length
 
     def forward(self, x, timestamp_hour: torch.tensor):
         x = self.cnn(x)
@@ -71,7 +77,7 @@ class CNNRNN(nn.Module):
         x, _ = self.rnn(x)
 
         # reshape to original input size
-        x = x.reshape(x.shape[0], 34560, -1)
+        x = x.reshape(x.shape[0], self._sequence_length, -1)
 
         x = torch.cat([x, timestamp_hour], 1)
         x = self.classifier(x)
