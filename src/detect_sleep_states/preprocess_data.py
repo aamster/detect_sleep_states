@@ -7,12 +7,20 @@ from tqdm import tqdm
 
 def generate_training_meta(
     events: pd.DataFrame,
-    sequence_length: int
+    sequence_length: int,
+    series_lengths: Dict
 ):
     sequences = []
     for series_id in events.index.unique():
         series_events = events.loc[series_id]
-        for seq_start in range(0, int(series_events['step'].max()), sequence_length):
+
+        if pd.isna(series_events['step'].max()):
+            # there are no events in the series. Just use the series length
+            seq_end = series_lengths[series_id]
+        else:
+            seq_end = int(series_events['step'].max())
+
+        for seq_start in range(0, seq_end, sequence_length):
             sequences.append({
                 'series_id': series_id,
                 'start': seq_start,
