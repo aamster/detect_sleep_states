@@ -12,7 +12,7 @@ def generate_training_meta(
     sequences = []
     for series_id in events.index.unique():
         series_events = events.loc[series_id]
-        for seq_start in range(0, int(series_events['end'].max()), sequence_length):
+        for seq_start in range(0, int(series_events['step'].max()), sequence_length):
             sequences.append({
                 'series_id': series_id,
                 'start': seq_start,
