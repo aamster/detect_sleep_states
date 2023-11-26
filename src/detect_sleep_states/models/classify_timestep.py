@@ -28,7 +28,8 @@ class CNNRNN(nn.Module):
         rnn_hidden_size: int,
         cnn_weights_path: str,
         rnn_bidirectional: bool = False,
-        num_rnn_layers: int = 1
+        num_rnn_layers: int = 1,
+        freeze_cnn: bool = False
     ):
         super().__init__()
         self.unet1d = CNN(
@@ -41,10 +42,11 @@ class CNNRNN(nn.Module):
             out_channels_first_layer=16,
             kernel_size=51
         )
-        for param in self.unet1d.encoder.parameters():
-            param.requires_grad = False
-        for param in self.unet1d.bottom_block.parameters():
-            param.requires_grad = False
+        if freeze_cnn:
+            for param in self.unet1d.encoder.parameters():
+                param.requires_grad = False
+            for param in self.unet1d.bottom_block.parameters():
+                param.requires_grad = False
 
         map_location = torch.device('cpu') if not torch.cuda.is_available() else None
         cnn = ClassifyTimestepModel.load_from_checkpoint(
@@ -107,8 +109,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         small_gap_threshold: int = 720,
         fill_small_gaps: bool = True,
         exclude_invalid_predictions: bool = False,
-        step_prediction_method: Literal['max_score', 'middle'] = 'middle',
-        loss_weights=None
+        step_prediction_method: Literal['max_score', 'middle'] = 'middle'
     ):
         super().__init__()
         self.model = model
