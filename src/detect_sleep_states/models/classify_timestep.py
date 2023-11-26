@@ -27,7 +27,9 @@ class CNNRNN(nn.Module):
     def __init__(
         self,
         rnn_hidden_size: int,
-        cnn_weights_path: str
+        cnn_weights_path: str,
+        rnn_bidirectional: bool = False,
+        num_rnn_layers: int = 1
     ):
         super().__init__()
         cnn = CNN(
@@ -57,11 +59,13 @@ class CNNRNN(nn.Module):
         self.rnn = nn.LSTM(
             input_size=16,  # num channels output by CNN
             hidden_size=rnn_hidden_size,
-            batch_first=True
+            batch_first=True,
+            bidirectional=rnn_bidirectional,
+            num_layers=num_rnn_layers
         )
         self.classifier = ConvolutionalBlock(
             dimensions=1,
-            in_channels=self.rnn.hidden_size + 24,     # num channels output by RNN + hour
+            in_channels=self.rnn.hidden_size*num_rnn_layers + 24,     # num channels output by RNN + hour
             out_channels=len(Label),
             kernel_size=1,
             activation=None
@@ -98,7 +102,8 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         small_gap_threshold: int = 720,
         fill_small_gaps: bool = True,
         exclude_invalid_predictions: bool = False,
-        step_prediction_method: Literal['max_score', 'middle'] = 'middle'
+        step_prediction_method: Literal['max_score', 'middle'] = 'middle',
+        loss_weights=None
     ):
         super().__init__()
         self.model = model
