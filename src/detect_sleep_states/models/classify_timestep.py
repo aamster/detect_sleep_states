@@ -19,8 +19,7 @@ class CNN(UNet1D):
         with torch.no_grad():
             skip_connections, encoding = self.encoder(x)
             encoding = self.bottom_block(encoding)
-            x = self.decoder(skip_connections, encoding)
-        return x
+        return encoding, skip_connections
 
 
 class CNNRNN(nn.Module):
@@ -32,7 +31,7 @@ class CNNRNN(nn.Module):
         num_rnn_layers: int = 1
     ):
         super().__init__()
-        cnn = CNN(
+        self.unet1d = CNN(
             in_channels=2,
             out_classes=len(Label),
             padding=1,
@@ -42,48 +41,54 @@ class CNNRNN(nn.Module):
             out_channels_first_layer=16,
             kernel_size=51
         )
+        for param in self.unet1d.encoder.parameters():
+            param.requires_grad = False
+        for param in self.unet1d.bottom_block.parameters():
+            param.requires_grad = False
 
         map_location = torch.device('cpu') if not torch.cuda.is_available() else None
         cnn = ClassifyTimestepModel.load_from_checkpoint(
             checkpoint_path=cnn_weights_path,
             map_location=map_location,
             learning_rate=1e-3,
-            model=cnn,
+            model=self.unet1d,
             hyperparams={},
             batch_size=8
         ).model
-        for param in cnn.parameters():
-            param.requires_grad = False
 
         self.cnn = cnn
         self.rnn = nn.LSTM(
-            input_size=16,  # num channels output by CNN
+            input_size=256,  # num channels output by CNN
             hidden_size=rnn_hidden_size,
             batch_first=True,
             bidirectional=rnn_bidirectional,
             num_layers=num_rnn_layers
         )
+        self.fc = nn.Linear(self.rnn.hidden_size*num_rnn_layers, 256)
         self.classifier = ConvolutionalBlock(
             dimensions=1,
-            in_channels=self.rnn.hidden_size*num_rnn_layers + 24,     # num channels output by RNN + hour
+            in_channels=16 + 24,
             out_channels=len(Label),
             kernel_size=1,
             activation=None
         )
 
     def forward(self, x, timestamp_hour: torch.tensor):
-        x = self.cnn(x)
+        x, skip_connections = self.cnn(x)
 
         # Preparing for RNN (N: batch size, T: sequence length, C: number of channels)
         x = x.permute(0, 2, 1)
 
         x, _ = self.rnn(x)
 
+        x = self.fc(x)
+
+        x = self.unet1d.decoder(skip_connections, x.moveaxis(2, 1))
+
         timestamp_hour = nn.functional.one_hot(timestamp_hour.long(),
                                                num_classes=24)
         timestamp_hour = timestamp_hour.moveaxis(2, 1)
 
-        x = x.moveaxis(2, 1)
         x = torch.cat([x, timestamp_hour], 1)
 
         x = self.classifier(x)
