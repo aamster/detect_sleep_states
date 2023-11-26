@@ -94,31 +94,12 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             start = row['start']
 
         if self._events is not None:
-            events = self._events.loc[[row.name]]
-
-            events = events[
-                ((events['start'] >= start) &
-                 (events['start'] <= start + self._sequence_length)) |
-                (events['start'] <= start) &
-                (events['end'] >= start)]
-            label = torch.zeros((self._sequence_length, len(Label)),
-                                dtype=torch.long)
-            for event in events.itertuples():
-                event_start = int(max(start, event.start))
-                event_end = int(min(start + self._sequence_length, event.end))
-
-                if event.event in (Label.onset.name, Label.wakeup.name):
-                    event_start = max(0, int(event_start - start)-360)
-                    event_end = int(event_end - start)+360
-                else:
-                    event_start = int(event_start - start)
-                    event_end = int(event_end - start)
-
-                label[event_start:event_end,
-                      getattr(Label, event.event).value] = 1
-
-            label[torch.where(label[:, Label.onset.value] == 1)[0], :3] = 0
-            label[torch.where(label[:, Label.wakeup.value] == 1)[0], :3] = 0
+            label = self.construct_target(
+                events=self._events,
+                series_id=row.name,
+                start=start,
+                sequence_length=self._sequence_length
+            )
         else:
             label = None
 
@@ -170,6 +151,41 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
     @property
     def meta(self):
         return self._sequences
+
+    @staticmethod
+    def construct_target(
+        events: pd.DataFrame,
+        series_id: str,
+        sequence_length: int,
+        start: int
+    ):
+        events = events.loc[[series_id]]
+
+        events = events[
+            ((events['start'] >= start) &
+             (events['start'] <= start + sequence_length)) |
+            (events['start'] <= start) &
+            (events['end'] >= start)]
+        label = torch.zeros((sequence_length, len(Label)),
+                            dtype=torch.long)
+        for event in events.itertuples():
+            event_start = int(max(start, event.start))
+            event_end = int(min(start + sequence_length, event.end))
+
+            if event.event in (Label.onset.name, Label.wakeup.name):
+                event_start = max(0, int(event_start - start) - 360)
+                event_end = int(event_end - start) + 360
+            else:
+                event_start = int(event_start - start)
+                event_end = int(event_end - start)
+
+            label[event_start:event_end,
+            getattr(Label, event.event).value] = 1
+
+        label[torch.where(label[:, Label.onset.value] == 1)[0], :3] = 0
+        label[torch.where(label[:, Label.wakeup.value] == 1)[0], :3] = 0
+
+        return label
 
 
 def is_valid_sequence(seq_meta: pd.Series, sequence_length: int):

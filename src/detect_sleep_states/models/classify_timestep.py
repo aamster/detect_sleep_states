@@ -120,7 +120,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self._step_prediction_method = step_prediction_method
 
         self.train_ce_loss = CrossEntropyLoss(
-            weight=torch.tensor([0.9, 0.54, 0.55, 7.8, 7.8])
+            weight=torch.tensor([0.7092, 0.4310, 1.2244, 5.4260, 5.4295])
         )
         self.train_f1 = torchmetrics.classification.MulticlassF1Score(
             num_classes=len(Label),
