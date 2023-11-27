@@ -24,6 +24,7 @@ dependencies = [
     "torch",
     "pyarrow",
     "albumentations",
+    "monai",
     "unet @ git+https://github.com/aamster/unet.git"
 ]
 
