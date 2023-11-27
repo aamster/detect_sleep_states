@@ -166,9 +166,11 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
              (events['start'] <= start + sequence_length)) |
             (events['start'] <= start) &
             (events['end'] >= start)]
-        label = torch.zeros((sequence_length, len(Label)),
+        label = torch.zeros((sequence_length, 3),
                             dtype=torch.long)
         for event in events.itertuples():
+            if event.event not in (Label.onset.name, Label.wakeup.name):
+                continue
             event_start = int(max(start, event.start))
             event_end = int(min(start + sequence_length, event.end))
 
@@ -179,11 +181,14 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
                 event_start = int(event_start - start)
                 event_end = int(event_end - start)
 
-            label[event_start:event_end,
-            getattr(Label, event.event).value] = 1
+            if event.event == Label.onset.name:
+                label_idx = 1
+            else:
+                label_idx = 2
+            label[event_start:event_end, label_idx] = 1
 
-        label[torch.where(label[:, Label.onset.value] == 1)[0], :3] = 0
-        label[torch.where(label[:, Label.wakeup.value] == 1)[0], :3] = 0
+        label[torch.where(label[:, 1] == 0)[0], 0] = 1
+        label[torch.where(label[:, 2] == 0)[0], 0] = 1
 
         return label
 

@@ -3,8 +3,9 @@ from typing import Dict, Any, Literal
 import lightning
 import torch
 import torchmetrics
-from torch.nn import CrossEntropyLoss
+from monai.losses import DiceLoss
 from torch import nn
+from torch.nn import CrossEntropyLoss
 from unet import UNet1D
 from unet.conv import ConvolutionalBlock
 
@@ -123,12 +124,13 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.train_ce_loss = CrossEntropyLoss(
             weight=torch.tensor([0.7092, 0.4310, 1.2244, 5.4260, 5.4295])
         )
+
         self.train_f1 = torchmetrics.classification.MulticlassF1Score(
-            num_classes=len(Label),
+            num_classes=3,
             average='none'
         )
         self.val_f1 = torchmetrics.classification.MulticlassF1Score(
-            num_classes=len(Label),
+            num_classes=3,
             average='none'
         )
 
@@ -145,9 +147,12 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
             target=target
         )
 
-        loss = self.train_ce_loss(logits, flattened_target)
+        dice_loss = DiceLoss(
+            include_background=False
+        )
+        loss = dice_loss(probs, target.moveaxis(2, 1))
 
-        self.log("train_ce_loss", loss, prog_bar=True,
+        self.log("train_dice_loss", loss, prog_bar=True,
                  batch_size=self._batch_size)
         self.train_f1.update(
             preds=flattened_preds,
@@ -339,7 +344,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def on_train_epoch_end(self) -> None:
         f1 = self.train_f1.compute()
-        f1 = f1[3:]
+        f1 = f1[1:]
 
         self.log('train_f1', f1.mean(),
                  batch_size=self._batch_size)
@@ -351,7 +356,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         f1 = self.val_f1.compute()
-        f1 = f1[3:]
+        f1 = f1[1:]
 
         self.log('val_f1', f1.mean(),
                  batch_size=self._batch_size)

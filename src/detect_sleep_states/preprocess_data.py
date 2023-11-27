@@ -126,6 +126,18 @@ def get_full_events(
                 })
                 prev_event_idx = event.step
 
+            if event_idx == series_events.shape[0] - 1:
+                if event.event == 'onset':
+                    next_event = 'sleep'
+                else:
+                    next_event = 'awake'
+
+                series_full.append({
+                    'series_id': series_id,
+                    'start': event.step + 1,
+                    'end': series_lengths[series_id],
+                    'event': next_event
+                })
         if series_id in missing.index.unique():
             if isinstance(missing.loc[series_id], pd.DataFrame):
                 series_missing = set(missing.loc[series_id].apply(
