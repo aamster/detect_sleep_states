@@ -209,6 +209,10 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         scores = torch.softmax(logits, dim=1)
         preds = torch.argmax(logits, dim=1)
 
+        label_idx_map = {
+            'onset': 1,
+            'wakeup': 2
+        }
         if self._return_raw_preds:
             return data['sequence'], preds
         # Taking the raw preds which can contain multiple contiguous e.g.
@@ -217,7 +221,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         preds_output = []
         for batch_idx in range(preds.shape[0]):
             pred_output = []
-            for label in (Label.onset, Label.wakeup):
+            for label in ('onset', 'wakeup'):
                 # Truncating, in case sequence extends past the actual data
                 # and needed to be padded
                 preds_possibly_truncated = \
@@ -228,7 +232,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                 if self._fill_small_gaps:
                     self.fill_gaps_inference(preds=preds_gaps_filled)
 
-                idxs = torch.where(preds_gaps_filled == label.value)[0]
+                idxs = torch.where(preds_gaps_filled == label_idx_map[label])[0]
 
                 if len(idxs) == 0:
                     continue
@@ -246,11 +250,11 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                     # Limiting the score idxs to only those that had the label
                     # before dilation
                     score_idxs = idxs[start:end][
-                        torch.where(preds_possibly_truncated[idxs[start:end]] == label.value)]
+                        torch.where(preds_possibly_truncated[idxs[start:end]] == label_idx_map[label])]
 
                     if self._step_prediction_method == 'max_score':
                         # The step is the most confident step in the block
-                        step_local = score_idxs[scores[batch_idx][label.value, score_idxs].argmax()]
+                        step_local = score_idxs[scores[batch_idx][label_idx_map[label], score_idxs].argmax()]
                     elif self._step_prediction_method == 'middle':
                         # taking average over a sequence of the same block
                         # e.g. multiple contiguous onset predictions, take the
@@ -283,9 +287,9 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
                     pred_output.append({
                         'series_id': data['series_id'][batch_idx],
-                        'event': label.name,
+                        'event': label,
                         'step': step.item(),
-                        'score': scores[batch_idx][label.value, score_idxs].mean().item(),
+                        'score': scores[batch_idx][label_idx_map[label], score_idxs].mean().item(),
                         'local_start': idxs[start].item(),
                         'local_end': idxs[end-1].item(),
                         'start': (data['start'][batch_idx] + idxs[start]).item(),
