@@ -227,10 +227,11 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                 preds_possibly_truncated = \
                     preds[batch_idx][:data['sequence_length'][batch_idx]]
 
-                preds_gaps_filled = preds_possibly_truncated
-
                 if self._fill_small_gaps:
-                    self.fill_gaps_inference(preds=preds_gaps_filled)
+                    preds_gaps_filled = self.fill_gaps_inference(
+                        preds=preds_possibly_truncated)
+                else:
+                    preds_gaps_filled = preds_possibly_truncated
 
                 idxs = torch.where(preds_gaps_filled == label_idx_map[label])[0]
 
@@ -300,47 +301,43 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         return preds_output
 
     def fill_gaps_inference(self, preds: torch.tensor):
-        for label in (Label.missing, Label.sleep, Label.awake):
-            preds = self._fill_gaps_inference(
-                preds=preds,
-                label=label
-            )
-        return preds
-
-    def _fill_gaps_inference(self, preds: torch.tensor, label: Label):
         """
         Fills small gaps in the predicted output
         :return:
         """
-        idxs = torch.where(preds == label.value)[0]
+        label_idx_map = {
+            'onset': 1,
+            'wakeup': 2
+        }
+        for label in ('onset', 'wakeup'):
+            segments = []
+            idxs = torch.where(preds == label_idx_map[label])[0]
 
-        i = 0
-        while i < len(idxs):
-            start = i
-            prev_idx = idxs[i]
-            while (i < len(idxs) and
-                   (idxs[i] == prev_idx or idxs[i] == prev_idx + 1)):
+            i = 0
+            while i < len(idxs):
+                start = i
                 prev_idx = idxs[i]
-                i += 1
-            end = i
+                while (i < len(idxs) and
+                       (idxs[i] == prev_idx or idxs[i] == prev_idx + 1)):
+                    prev_idx = idxs[i]
+                    i += 1
+                end = i
 
-            start = idxs[start]
-            end = idxs[end-1]
+                start = idxs[start]
+                end = idxs[end-1]
 
-            if end - start < self._small_gap_threshold:
-                if start > 0 and end < preds.shape[0] - 1:
-                    if preds[start-1] == preds[end+1]:
-                        preds[start:end+1] = preds[start-1]
-                    elif preds[start - 1] == Label.missing.value:
-                        preds[start:end + 1] = Label.missing.value
-                    elif preds[end + 1] == Label.missing.value:
-                        preds[start:end + 1] = Label.missing.value
-                elif start > 0:
-                    if preds[start - 1] == Label.missing.value:
-                        preds[start:end + 1] = Label.missing.value
-                elif end < preds.shape[0] - 1:
-                    if preds[end + 1] == Label.missing.value:
-                        preds[start:end + 1] = Label.missing.value
+                if len(segments) > 0:
+                    prev_end = segments[-1][1]
+                    if end - self._small_gap_threshold < prev_end:
+                        prev_start = segments[-1][0]
+                        segments[-1] = (prev_start, end)
+                    else:
+                        segments.append((start, end))
+                else:
+                    segments.append((start, end))
+
+            for segment_start, segment_end in segments:
+                preds[segment_start:segment_end+1] = label_idx_map[label]
         return preds
 
     def on_train_start(self) -> None:
