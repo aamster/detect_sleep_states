@@ -25,6 +25,10 @@ dependencies = [
     "pyarrow",
     "albumentations",
     "monai",
+    "argschema",
+    "mlflow",
+    "awscli",
+    "boto3",
     "unet @ git+https://github.com/aamster/unet.git"
 ]
 
