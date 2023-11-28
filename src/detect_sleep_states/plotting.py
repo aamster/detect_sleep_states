@@ -18,7 +18,7 @@ def plot_predictions(
     figsize=(20, 10)
 ):
     fig, ax = plt.subplots(figsize=figsize)
-    colors = {1: 'blue', 1: 'yellow'}
+    colors = {0: 'blue', 1: 'purple', 2: 'yellow'}
 
     events = events[(events['start'] >= start_idx) & (events['start'] <= end_idx)]
 
