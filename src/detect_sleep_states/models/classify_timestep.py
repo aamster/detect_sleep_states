@@ -136,9 +136,6 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def training_step(self, batch, batch_idx):
         data, target = batch
-        for series_id in data['series_id']:
-            self._train_series_id.add(series_id)
-
         logits = self.model(x=data['sequence'], timestamp_hour=data['hour'])
         probs = torch.softmax(logits, dim=1)
 
