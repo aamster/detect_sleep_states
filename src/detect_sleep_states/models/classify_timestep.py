@@ -1,15 +1,15 @@
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Literal, Optional, List
 
 import lightning
+import pandas as pd
 import torch
-import torchmetrics
 from monai.losses import DiceLoss
 from torch import nn
-from torch.nn import CrossEntropyLoss
 from unet import UNet1D
 from unet.conv import ConvolutionalBlock
 
 from detect_sleep_states.dataset import Label
+from detect_sleep_states.metric import score
 
 
 class CNN(UNet1D):
@@ -107,10 +107,10 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         hyperparams: Dict,
         batch_size: int,
         return_raw_preds: bool = False,
-        small_gap_threshold: int = 720,
+        small_gap_threshold: int = 360,
         fill_small_gaps: bool = True,
         exclude_invalid_predictions: bool = False,
-        step_prediction_method: Literal['max_score', 'middle'] = 'middle'
+        events_path: Optional[str] = None
     ):
         super().__init__()
         self.model = model
@@ -119,61 +119,46 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self._small_gap_threshold = small_gap_threshold
         self._fill_small_gaps = fill_small_gaps
         self._exclude_invalid_predictions = exclude_invalid_predictions
-        self._step_prediction_method = step_prediction_method
+        self._events_path = events_path
 
-        self.train_ce_loss = CrossEntropyLoss(
-            weight=torch.tensor([0.7092, 0.4310, 1.2244, 5.4260, 5.4295])
-        )
-
-        self.train_f1 = torchmetrics.classification.MulticlassF1Score(
-            num_classes=3,
-            average='none'
-        )
-        self.val_f1 = torchmetrics.classification.MulticlassF1Score(
-            num_classes=3,
-            average='none'
-        )
+        self._train_series_id = set()
+        self._val_series_id = set()
+        self._train_preds = []
+        self._val_preds = []
 
         self._learning_rate = learning_rate
         self._hyperparams = hyperparams
 
     def training_step(self, batch, batch_idx):
         data, target = batch
+        for series_id in data['series_id']:
+            self._train_series_id.add(series_id)
+
         logits = self.model(x=data['sequence'], timestamp_hour=data['hour'])
         probs = torch.softmax(logits, dim=1)
-
-        flattened_preds, flattened_target = self._flatten_preds_and_targets(
-            probs=probs,
-            target=target
-        )
 
         dice_loss = DiceLoss(
             include_background=False
         )
         loss = dice_loss(probs, target.moveaxis(2, 1))
 
+        self._train_preds.append(self.predict_step(
+            batch=batch,
+            batch_idx=batch_idx
+        ))
         self.log("train_dice_loss", loss, prog_bar=True,
                  batch_size=self._batch_size)
-        self.train_f1.update(
-            preds=flattened_preds,
-            target=flattened_target
-        )
+
         return loss
 
     def validation_step(self, batch, batch_idx):
         data, target = batch
-        logits = self.model(data['sequence'], timestamp_hour=data['hour'])
-        probs = torch.softmax(logits, dim=1)
-
-        flattened_preds, flattened_target = self._flatten_preds_and_targets(
-            probs=probs,
-            target=target
-        )
-
-        self.val_f1.update(
-            preds=flattened_preds,
-            target=flattened_target
-        )
+        for series_id in data['series_id']:
+            self._val_series_id.add(series_id)
+        self._val_preds.append(self.predict_step(
+            batch=batch,
+            batch_idx=batch_idx
+        ))
 
     @staticmethod
     def _flatten_preds_and_targets(probs, target, threshold=0.5):
@@ -209,10 +194,6 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         scores = torch.softmax(logits, dim=1)
         preds = torch.argmax(logits, dim=1)
 
-        label_idx_map = {
-            'onset': 1,
-            'wakeup': 2
-        }
         if self._return_raw_preds:
             return data['sequence'], preds
         # Taking the raw preds which can contain multiple contiguous e.g.
@@ -221,97 +202,21 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         preds_output = []
         for batch_idx in range(preds.shape[0]):
             pred_output = []
-            for label in ('onset', 'wakeup'):
-                # Truncating, in case sequence extends past the actual data
-                # and needed to be padded
-                preds_possibly_truncated = \
-                    preds[batch_idx][:data['sequence_length'][batch_idx]]
+            # Truncating, in case sequence extends past the actual data
+            # and needed to be padded
+            preds_possibly_truncated = \
+                preds[batch_idx][:data['sequence_length'][batch_idx]]
 
-                if self._fill_small_gaps:
-                    preds_gaps_filled = self.fill_gaps_inference(
-                        preds=preds_possibly_truncated)
-                else:
-                    preds_gaps_filled = preds_possibly_truncated
+            if self._fill_small_gaps:
+                preds_gaps_filled = self.fill_gaps_inference(
+                    preds=preds_possibly_truncated)
+            else:
+                preds_gaps_filled = preds_possibly_truncated
 
-                idxs = torch.where(preds_gaps_filled == label_idx_map[label])[0]
+            idxs = torch.where(preds_gaps_filled == 1)[0]
 
-                if len(idxs) == 0:
-                    continue
-
-                i = 0
-                while i < len(idxs):
-                    start = i
-                    prev_idx = idxs[i]
-                    while (i < len(idxs) and
-                           (idxs[i] == prev_idx or idxs[i] == prev_idx + 1)):
-                        prev_idx = idxs[i]
-                        i += 1
-                    end = i
-
-                    # Limiting the score idxs to only those that had the label
-                    # before dilation
-                    score_idxs = idxs[start:end][
-                        torch.where(preds_possibly_truncated[idxs[start:end]] == label_idx_map[label])]
-
-                    if self._step_prediction_method == 'max_score':
-                        # The step is the most confident step in the block
-                        step_local = score_idxs[scores[batch_idx][label_idx_map[label], score_idxs].argmax()]
-                    elif self._step_prediction_method == 'middle':
-                        # taking average over a sequence of the same block
-                        # e.g. multiple contiguous onset predictions, take the
-                        # average idx over the block length
-                        step_local = idxs[start] + int(
-                            (idxs[end - 1] - idxs[start]) / 2)
-                    else:
-                        raise ValueError(f'Unkown step_prediction_method '
-                                         f'{self._step_prediction_method}')
-
-                    # convert to global sequence idx
-                    step = data['start'][batch_idx] + step_local
-
-                    if self._exclude_invalid_predictions:
-                        # We expect the pattern onset sleep wakeup awake onset
-                        # if it is something else, exclude the prediction
-                        if idxs[start] > 0:
-                            expected_prev_label = (
-                                Label.awake.value if label == Label.onset
-                                else Label.sleep.value)
-
-                            if preds[batch_idx][idxs[start]-1] != expected_prev_label:
-                                continue
-                        if idxs[end-1] < preds.shape[1] - 1:
-                            expected_next_label = (
-                                Label.sleep.value if label == Label.onset
-                                else Label.awake.value)
-                            if preds[batch_idx][idxs[end-1]+1] != expected_next_label:
-                                continue
-
-                    pred_output.append({
-                        'series_id': data['series_id'][batch_idx],
-                        'event': label,
-                        'step': step.item(),
-                        'score': scores[batch_idx][label_idx_map[label], score_idxs].mean().item(),
-                        'local_start': idxs[start].item(),
-                        'local_end': idxs[end-1].item(),
-                        'start': (data['start'][batch_idx] + idxs[start]).item(),
-                        'end': (data['start'][batch_idx] + idxs[end - 1]).item()
-                    })
-            preds_output.append(pred_output)
-
-        return preds_output
-
-    def fill_gaps_inference(self, preds: torch.tensor):
-        """
-        Fills small gaps in the predicted output
-        :return:
-        """
-        label_idx_map = {
-            'onset': 1,
-            'wakeup': 2
-        }
-        for label in ('onset', 'wakeup'):
-            segments = []
-            idxs = torch.where(preds == label_idx_map[label])[0]
+            if len(idxs) == 0:
+                continue
 
             i = 0
             while i < len(idxs):
@@ -323,49 +228,137 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                     i += 1
                 end = i
 
-                start = idxs[start]
-                end = idxs[end-1]
+                score_idxs = idxs[start:end]
 
-                if len(segments) > 0:
-                    prev_end = segments[-1][1]
-                    if end - self._small_gap_threshold < prev_end:
-                        prev_start = segments[-1][0]
-                        segments[-1] = (prev_start, end)
-                    else:
-                        segments.append((start, end))
+                steps_local = [idxs[start], idxs[end - 1]]
+
+                # convert to global sequence idx
+                steps = [data['start'][batch_idx] + x for x in steps_local]
+
+                if self._exclude_invalid_predictions:
+                    # We expect the pattern onset sleep wakeup awake onset
+                    # if it is something else, exclude the prediction
+                    if idxs[start] > 0:
+                        expected_prev_label = (
+                            Label.awake.value if label == Label.onset
+                            else Label.sleep.value)
+
+                        if preds[batch_idx][idxs[start]-1] != expected_prev_label:
+                            continue
+                    if idxs[end-1] < preds.shape[1] - 1:
+                        expected_next_label = (
+                            Label.sleep.value if label == Label.onset
+                            else Label.awake.value)
+                        if preds[batch_idx][idxs[end-1]+1] != expected_next_label:
+                            continue
+
+                if steps_local[-1] - steps_local[0] > 360:
+                    for step, step_label in zip(steps, ('onset', 'wakeup')):
+                        score_idx = 0 if step_label == 'onset' else -1
+                        pred_output.append({
+                            'series_id': data['series_id'][batch_idx],
+                            'event': step_label,
+                            'step': step.item(),
+                            'score': scores[batch_idx][1, score_idxs[score_idx]].item()
+                        })
+            preds_output.append(pred_output)
+
+        return preds_output
+
+    def fill_gaps_inference(self, preds: torch.tensor):
+        """
+        Fills small gaps in the predicted output
+        :return:
+        """
+        segments = []
+        idxs = torch.where(preds == 1)[0]
+
+        i = 0
+        while i < len(idxs):
+            start = i
+            prev_idx = idxs[i]
+            while (i < len(idxs) and
+                   (idxs[i] == prev_idx or idxs[i] == prev_idx + 1)):
+                prev_idx = idxs[i]
+                i += 1
+            end = i
+
+            start = idxs[start]
+            end = idxs[end-1]
+
+            if len(segments) > 0:
+                prev_end = segments[-1][1]
+                if end - self._small_gap_threshold < prev_end:
+                    prev_start = segments[-1][0]
+                    segments[-1] = (prev_start, end)
                 else:
                     segments.append((start, end))
+            else:
+                segments.append((start, end))
 
-            for segment_start, segment_end in segments:
-                preds[segment_start:segment_end+1] = label_idx_map[label]
+        for segment_start, segment_end in segments:
+            preds[segment_start:segment_end+1] = 1
         return preds
 
     def on_train_start(self) -> None:
         self.logger.log_hyperparams(params=self._hyperparams)
 
     def on_train_epoch_end(self) -> None:
-        f1 = self.train_f1.compute()
-        f1 = f1[1:]
+        map = self._calculate_map(
+            preds=self._train_preds,
+            series_ids=self._train_series_id
+        )
 
-        self.log('train_f1', f1.mean(),
+        self.log("train_map", map,
                  batch_size=self._batch_size)
-        self.log('train_onset_f1', f1[0],
-                 batch_size=self._batch_size)
-        self.log('train_wakeup_f1', f1[1],
-                 batch_size=self._batch_size)
-        self.train_f1.reset()
+
+        self._train_preds = []
 
     def on_validation_epoch_end(self) -> None:
-        f1 = self.val_f1.compute()
-        f1 = f1[1:]
+        map = self._calculate_map(
+            preds=self._val_preds,
+            series_ids=self._val_series_id
+        )
 
-        self.log('val_f1', f1.mean(),
+        self.log("val_map", map,
                  batch_size=self._batch_size)
-        self.log('val_onset_f1', f1[0],
-                 batch_size=self._batch_size)
-        self.log('val_wakeup_f1', f1[1],
-                 batch_size=self._batch_size)
-        self.val_f1.reset()
+
+        self._val_preds = []
+
+    def _calculate_map(self, preds: List, series_ids: set) -> float:
+        submission_flat = []
+        for batch in preds:
+            for sequence_pred in batch:
+                for pred in sequence_pred:
+                    submission_flat.append(pred)
+        preds = pd.DataFrame(submission_flat)
+
+        solution = pd.read_csv(self._events_path)
+        solution = solution[
+            solution['series_id'].isin(list(series_ids))]
+        solution = solution[~solution['step'].isna()]
+
+        if preds.empty:
+            preds = pd.DataFrame(
+                columns=list(solution.columns) + ['score']
+            )
+            preds['step'] = preds['step'].astype(int)
+            preds['score'] = preds['score'].astype(float)
+            return 0.0
+
+        column_names = {
+            'series_id_column_name': 'series_id',
+            'time_column_name': 'step',
+            'event_column_name': 'event',
+            'score_column_name': 'score',
+        }
+        tolerances = {'onset': [12, 36, 60, 90, 120, 150, 180, 240, 300, 360],
+                      'wakeup': [12, 36, 60, 90, 120, 150, 180, 240, 300, 360]}
+        map, detections_matched, gt_matched = score(
+            solution, preds, tolerances, **column_names)
+
+        return map
+
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self._learning_rate)

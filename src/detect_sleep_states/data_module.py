@@ -23,8 +23,7 @@ class SleepDataModule(lightning.LightningDataModule):
         train_transform: Optional[transforms.Compose] = None,
         inference_transform: Optional[transforms.Compose] = None,
         is_debug: bool = False,
-        load_series: bool = True,
-        target_window: int = 360
+        load_series: bool = True
     ):
         super().__init__()
 
@@ -44,7 +43,6 @@ class SleepDataModule(lightning.LightningDataModule):
         self._inference_transform = inference_transform
         self._is_debug = is_debug
         self._load_series = load_series
-        self._target_window = target_window
 
     @staticmethod
     def get_train_val_split(series_ids: np.ndarray) -> (
@@ -67,7 +65,7 @@ class SleepDataModule(lightning.LightningDataModule):
             if self._is_debug:
                 train_series_ids = pd.Series(self._meta.index).sample(
                     1, random_state=1234)
-                train = self._meta.loc[train_series_ids].iloc[[4]]
+                train = self._meta.loc[train_series_ids]
             else:
                 train = self._meta.loc[train_series_ids]
             self._train = ClassifySegmentDataset(
@@ -77,8 +75,7 @@ class SleepDataModule(lightning.LightningDataModule):
                 events=self._events.loc[train_series_ids],
                 is_train=False if self._is_debug else True,
                 transform=self._train_transform,
-                limit_to_series_ids=train_series_ids.tolist(),
-                target_window=self._target_window
+                limit_to_series_ids=train_series_ids.tolist()
             )
 
             self._val = ClassifySegmentDataset(
@@ -88,8 +85,7 @@ class SleepDataModule(lightning.LightningDataModule):
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
-                limit_to_series_ids=val_series_ids.tolist(),
-                target_window=self._target_window
+                limit_to_series_ids=val_series_ids.tolist()
             )
         elif stage == 'predict':
             self._predict = ClassifySegmentDataset(
@@ -101,8 +97,7 @@ class SleepDataModule(lightning.LightningDataModule):
                 is_train=False,
                 transform=self._inference_transform,
                 limit_to_series_ids=self._series_ids.tolist(),
-                load_series=self._load_series,
-                target_window=self._target_window
+                load_series=self._load_series
             )
 
     def train_dataloader(self):

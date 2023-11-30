@@ -35,8 +35,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         is_train: bool = True,
         events: Optional[pd.DataFrame] = None,
         limit_to_series_ids: Optional[List] = None,
-        load_series: bool = True,
-        target_window: int = 360
+        load_series: bool = True
     ):
         """
 
@@ -50,8 +49,6 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             Only relevant in training
         :param sequence_length:
             Number of consecutive timesteps to sample
-        :param target_window:
-            Number of timesteps around the event to label as the event
         :param is_train:
         :param transform:
         :param limit_to_series_ids
@@ -79,7 +76,6 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         self._is_train = is_train
         self._sequence_length = sequence_length
         self._transform = transform
-        self._target_window = target_window
 
     def __getitem__(self, index):
         row = self._sequences.iloc[index]
@@ -103,8 +99,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
                 events=self._events,
                 series_id=row.name,
                 start=start,
-                sequence_length=self._sequence_length,
-                target_window=self._target_window
+                sequence_length=self._sequence_length
             )
         else:
             label = None
@@ -163,8 +158,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         events: pd.DataFrame,
         series_id: str,
         sequence_length: int,
-        start: int,
-        target_window: int
+        start: int
     ):
         events = events.loc[[series_id]]
 
@@ -173,30 +167,21 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
              (events['start'] <= start + sequence_length)) |
             (events['start'] <= start) &
             (events['end'] >= start)]
-        label = torch.zeros((sequence_length, 3),
-                            dtype=torch.long)
+        label = torch.zeros((sequence_length, 2),
+                            dtype=torch.float)
         for event in events.itertuples():
-            if event.event not in (Label.onset.name, Label.wakeup.name):
+            if event.event != Label.sleep.name:
                 continue
+
             event_start = int(max(start, event.start))
             event_end = int(min(start + sequence_length, event.end))
 
-            if event.event in (Label.onset.name, Label.wakeup.name):
-                # Expanding the target to contain target_window timesteps
-                event_start = max(0, int(event_start - start) - target_window)
-                event_end = int(event_end - start) + target_window
-            else:
-                event_start = int(event_start - start)
-                event_end = int(event_end - start)
+            event_start = max(0, int(event_start - start))
+            event_end = int(event_end - start)
 
-            if event.event == Label.onset.name:
-                label_idx = 1
-            else:
-                label_idx = 2
-            label[event_start:event_end+1, label_idx] = 1
+            label[event_start:event_end+1, 1] = 1
 
         label[torch.where(label[:, 1] == 0)[0], 0] = 1
-        label[torch.where(label[:, 2] == 0)[0], 0] = 1
 
         return label
 
