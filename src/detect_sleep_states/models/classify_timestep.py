@@ -323,10 +323,6 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
         self.log('train_f1', f1.mean(),
                  batch_size=self._batch_size)
-        self.log('train_onset_f1', f1[0],
-                 batch_size=self._batch_size)
-        self.log('train_wakeup_f1', f1[1],
-                 batch_size=self._batch_size)
         self.train_f1.reset()
 
     def on_validation_epoch_end(self) -> None:
@@ -334,10 +330,6 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         f1 = f1[1:]
 
         self.log('val_f1', f1.mean(),
-                 batch_size=self._batch_size)
-        self.log('val_onset_f1', f1[0],
-                 batch_size=self._batch_size)
-        self.log('val_wakeup_f1', f1[1],
                  batch_size=self._batch_size)
         self.val_f1.reset()
 
