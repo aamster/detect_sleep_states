@@ -1,8 +1,9 @@
-from typing import Dict, Any, Literal, Optional, List
+from typing import Dict, Any, Optional, List
 
 import lightning
 import pandas as pd
 import torch
+import torchmetrics
 from monai.losses import DiceLoss
 from torch import nn
 from unet import UNet1D
@@ -121,10 +122,14 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self._exclude_invalid_predictions = exclude_invalid_predictions
         self._events_path = events_path
 
-        self._train_series_id = set()
-        self._val_series_id = set()
-        self._train_preds = []
-        self._val_preds = []
+        self.train_f1 = torchmetrics.classification.MulticlassF1Score(
+            num_classes=2,
+            average='none'
+        )
+        self.val_f1 = torchmetrics.classification.MulticlassF1Score(
+            num_classes=2,
+            average='none'
+        )
 
         self._learning_rate = learning_rate
         self._hyperparams = hyperparams
@@ -137,6 +142,11 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         logits = self.model(x=data['sequence'], timestamp_hour=data['hour'])
         probs = torch.softmax(logits, dim=1)
 
+        flattened_preds, flattened_target = self._flatten_preds_and_targets(
+            probs=probs,
+            target=target
+        )
+
         dice_loss = DiceLoss(
             include_background=False
         )
@@ -148,17 +158,27 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         ))
         self.log("train_dice_loss", loss, prog_bar=True,
                  batch_size=self._batch_size)
+        self.train_f1.update(
+            preds=flattened_preds,
+            target=flattened_target
+        )
 
         return loss
 
     def validation_step(self, batch, batch_idx):
         data, target = batch
-        for series_id in data['series_id']:
-            self._val_series_id.add(series_id)
-        self._val_preds.append(self.predict_step(
-            batch=batch,
-            batch_idx=batch_idx
-        ))
+        logits = self.model(data['sequence'], timestamp_hour=data['hour'])
+        probs = torch.softmax(logits, dim=1)
+
+        flattened_preds, flattened_target = self._flatten_preds_and_targets(
+            probs=probs,
+            target=target
+        )
+
+        self.val_f1.update(
+            preds=flattened_preds,
+            target=flattened_target
+        )
 
     @staticmethod
     def _flatten_preds_and_targets(probs, target, threshold=0.5):
@@ -238,19 +258,20 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
                 if self._exclude_invalid_predictions:
                     # We expect the pattern onset sleep wakeup awake onset
                     # if it is something else, exclude the prediction
-                    if idxs[start] > 0:
-                        expected_prev_label = (
-                            Label.awake.value if label == Label.onset
-                            else Label.sleep.value)
-
-                        if preds[batch_idx][idxs[start]-1] != expected_prev_label:
-                            continue
-                    if idxs[end-1] < preds.shape[1] - 1:
-                        expected_next_label = (
-                            Label.sleep.value if label == Label.onset
-                            else Label.awake.value)
-                        if preds[batch_idx][idxs[end-1]+1] != expected_next_label:
-                            continue
+                    raise NotImplementedError()
+                    # if idxs[start] > 0:
+                    #     expected_prev_label = (
+                    #         Label.awake.value if label == Label.onset
+                    #         else Label.sleep.value)
+                    #
+                    #     if preds[batch_idx][idxs[start]-1] != expected_prev_label:
+                    #         continue
+                    # if idxs[end-1] < preds.shape[1] - 1:
+                    #     expected_next_label = (
+                    #         Label.sleep.value if label == Label.onset
+                    #         else Label.awake.value)
+                    #     if preds[batch_idx][idxs[end-1]+1] != expected_next_label:
+                    #         continue
 
                 if steps_local[-1] - steps_local[0] > 360:
                     for step, step_label in zip(steps, ('onset', 'wakeup')):
@@ -304,26 +325,28 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         self.logger.log_hyperparams(params=self._hyperparams)
 
     def on_train_epoch_end(self) -> None:
-        map = self._calculate_map(
-            preds=self._train_preds,
-            series_ids=self._train_series_id
-        )
+        f1 = self.train_f1.compute()
+        f1 = f1[1:]
 
-        self.log("train_map", map,
+        self.log('train_f1', f1.mean(),
                  batch_size=self._batch_size)
-
-        self._train_preds = []
+        self.log('train_onset_f1', f1[0],
+                 batch_size=self._batch_size)
+        self.log('train_wakeup_f1', f1[1],
+                 batch_size=self._batch_size)
+        self.train_f1.reset()
 
     def on_validation_epoch_end(self) -> None:
-        map = self._calculate_map(
-            preds=self._val_preds,
-            series_ids=self._val_series_id
-        )
+        f1 = self.val_f1.compute()
+        f1 = f1[1:]
 
-        self.log("val_map", map,
+        self.log('val_f1', f1.mean(),
                  batch_size=self._batch_size)
-
-        self._val_preds = []
+        self.log('val_onset_f1', f1[0],
+                 batch_size=self._batch_size)
+        self.log('val_wakeup_f1', f1[1],
+                 batch_size=self._batch_size)
+        self.val_f1.reset()
 
     def _calculate_map(self, preds: List, series_ids: set) -> float:
         submission_flat = []
