@@ -149,10 +149,6 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
         )
         loss = dice_loss(probs, target.moveaxis(2, 1))
 
-        self._train_preds.append(self.predict_step(
-            batch=batch,
-            batch_idx=batch_idx
-        ))
         self.log("train_dice_loss", loss, prog_bar=True,
                  batch_size=self._batch_size)
         self.train_f1.update(
