@@ -160,7 +160,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         data, target = batch
-        logits = self.model(data['sequence'], timestamp_hour=data['hour'])
+        logits = self.model(data['sequence'])
         probs = torch.softmax(logits, dim=1)
 
         flattened_preds, flattened_target = self._flatten_preds_and_targets(

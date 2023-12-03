@@ -112,14 +112,14 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         hour = data['timestamp'].apply(lambda x: x.hour)
 
         # https://ianlondon.github.io/blog/encoding-cyclical-features-24hour-time/
-        hour_sin = 2 * np.pi * hour / 24
-        hour_cos = 2 * np.pi * hour / 24
+        hour_sin = np.sin(2 * np.pi * hour / 24)
+        hour_cos = np.cos(2 * np.pi * hour / 24)
 
         sequence = np.stack([
             data['anglez'],
             data['enmo'],
-            hour_sin,
-            hour_cos
+            hour_sin.values,
+            hour_cos.values
         ])
 
         sequence_length = sequence.shape[1]
@@ -140,8 +140,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             'start': start,
             'end': start + self._sequence_length,
             'sequence_length': sequence_length,
-            'series_id': row.name,
-            'hour': hour
+            'series_id': row.name
         }
 
         if label is None:
