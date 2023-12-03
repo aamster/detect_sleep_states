@@ -109,9 +109,17 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         data['timestamp'] = data['timestamp'].apply(
             lambda x: datetime.datetime.strptime(x, '%Y-%m-%dT%H:%M:%S%z'))
 
+        hour = data['timestamp'].apply(lambda x: x.hour)
+
+        # https://ianlondon.github.io/blog/encoding-cyclical-features-24hour-time/
+        hour_sin = 2 * np.pi * hour / 24
+        hour_cos = 2 * np.pi * hour / 24
+
         sequence = np.stack([
             data['anglez'],
-            data['enmo']
+            data['enmo'],
+            hour_sin,
+            hour_cos
         ])
 
         sequence_length = sequence.shape[1]
@@ -121,11 +129,6 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             sequence = np.pad(
                 sequence,
                 pad_width=((0, 0), (0, self._sequence_length - sequence_length))
-            )
-            hour = np.pad(
-                hour,
-                pad_width=(0, self._sequence_length - data.shape[0]),
-                constant_values=hour[-1]
             )
 
         sequence = self._transform(image=sequence)['image']
