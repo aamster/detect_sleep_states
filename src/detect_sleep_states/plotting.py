@@ -3,6 +3,7 @@ from typing import List, Dict
 import pandas as pd
 import torch
 from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 
 from detect_sleep_states.dataset import Label
 
@@ -43,11 +44,18 @@ def plot_predictions(
         anglez)[pred == 1] if variable == 'anglez' \
         else enmo[pred == 1]
     y_axis[y_axis == -99] = torch.nan
-    ax.plot(x_axis, y_axis, color='purple', label='sleep')
+    ax.plot(x_axis, y_axis, color='purple')
 
+    legend = []
     for label in ('onset', 'wakeup'):
         for event in events[events['event'] == label].itertuples():
             ax.axvline(event.start, color=colors[label_idx_map[label]],
                             linestyle='dashed')
-        ax.legend()
+
+    legend.append(Line2D([], [], color='blue', linestyle='--', label='onset'))
+    legend.append(Line2D([], [], color='yellow', linestyle='--',
+                         label='wakeup'))
+    legend.append(Line2D([], [], color='purple', linestyle='-',
+                         label='sleep'))
+    ax.legend(handles=legend)
     plt.show()
