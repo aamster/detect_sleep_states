@@ -23,7 +23,9 @@ class SleepDataModule(lightning.LightningDataModule):
         train_transform: Optional[transforms.Compose] = None,
         inference_transform: Optional[transforms.Compose] = None,
         is_debug: bool = False,
-        load_series: bool = True
+        load_series: bool = True,
+        event_width: int = 360,
+        event_sigma: int = 10
     ):
         super().__init__()
 
@@ -43,6 +45,8 @@ class SleepDataModule(lightning.LightningDataModule):
         self._inference_transform = inference_transform
         self._is_debug = is_debug
         self._load_series = load_series
+        self._event_width = event_width
+        self._event_sigma = event_sigma
 
     @staticmethod
     def get_train_val_split(series_ids: np.ndarray) -> (
@@ -75,7 +79,9 @@ class SleepDataModule(lightning.LightningDataModule):
                 events=self._events.loc[train_series_ids],
                 is_train=False if self._is_debug else True,
                 transform=self._train_transform,
-                limit_to_series_ids=train_series_ids.tolist()
+                limit_to_series_ids=train_series_ids.tolist(),
+                event_width=self._event_width,
+                event_sigma=self._event_sigma
             )
 
             self._val = ClassifySegmentDataset(
@@ -85,7 +91,9 @@ class SleepDataModule(lightning.LightningDataModule):
                 sequence_length=self._sequence_length,
                 is_train=False,
                 transform=self._inference_transform,
-                limit_to_series_ids=val_series_ids.tolist()
+                limit_to_series_ids=val_series_ids.tolist(),
+                event_width=self._event_width,
+                event_sigma=self._event_sigma
             )
         elif stage == 'predict':
             self._predict = ClassifySegmentDataset(
