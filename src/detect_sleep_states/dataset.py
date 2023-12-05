@@ -24,6 +24,11 @@ label_id_str_map = {
     4: 'wakeup'
 }
 
+ANGLEZ_MEAN = -8.810476
+ANGLEZ_STD = 35.521877
+ENMO_MEAN = 0.041315
+ENMO_STD = 0.101829
+
 
 class ClassifySegmentDataset(torch.utils.data.Dataset):
     def __init__(
@@ -121,8 +126,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         hour_cos = np.cos(2 * np.pi * hour / 24)
 
         sequence = np.stack([
-            data['anglez'],
-            data['enmo'],
+            (data['anglez'] - ANGLEZ_MEAN) / ANGLEZ_STD,
+            (data['enmo'] - ENMO_MEAN) / ENMO_STD,
             hour_sin.values,
             hour_cos.values
         ])
@@ -134,10 +139,6 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
                 sequence,
                 pad_width=((0, 0), (0, self._sequence_length - sequence_length))
             )
-
-        sequence = self._transform(image=sequence)['image']
-
-        sequence = sequence.squeeze(dim=0)
 
         data = {
             'sequence': sequence,

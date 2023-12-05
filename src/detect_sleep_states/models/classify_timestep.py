@@ -130,7 +130,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def training_step(self, batch, batch_idx):
         data, target = batch
-        logits = self.model(x=data['sequence'])
+        logits = self.model(x=data['sequence'].float())
 
         loss = self._loss_fn(logits, target.moveaxis(2, 1))
 
@@ -141,7 +141,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         data, target = batch
-        logits = self.model(data['sequence'])
+        logits = self.model(data['sequence'].float())
 
         loss = self._loss_fn(logits, target.moveaxis(2, 1))
 
@@ -184,7 +184,7 @@ class ClassifyTimestepModel(lightning.pytorch.LightningModule):
             data, _ = batch
         else:
             data = batch
-        logits = self.model(data['sequence'], timestamp_hour=data['hour'])
+        logits = self.model(data['sequence'].float())
         scores = torch.softmax(logits, dim=1)
         preds = torch.argmax(logits, dim=1)
 
