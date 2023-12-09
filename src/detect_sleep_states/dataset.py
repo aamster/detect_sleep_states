@@ -24,6 +24,11 @@ label_id_str_map = {
     4: 'wakeup'
 }
 
+ANGLEZ_MEAN = -8.810476
+ANGLEZ_STD = 35.521877
+ENMO_MEAN = 0.041315
+ENMO_STD = 0.101829
+
 
 class ClassifySegmentDataset(torch.utils.data.Dataset):
     def __init__(
@@ -35,7 +40,9 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         is_train: bool = True,
         events: Optional[pd.DataFrame] = None,
         limit_to_series_ids: Optional[List] = None,
-        load_series: bool = True
+        load_series: bool = True,
+        event_width: int = 360,
+        event_sigma: int = 10
     ):
         """
 
@@ -48,6 +55,7 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
             Table with all onset, wakeup events.
             Only relevant in training
         :param sequence_length:
+            Number of consecutive timesteps to sample
         :param is_train:
         :param transform:
         :param limit_to_series_ids
@@ -75,6 +83,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         self._is_train = is_train
         self._sequence_length = sequence_length
         self._transform = transform
+        self._event_width = event_width
+        self._event_sigma = event_sigma
 
     def __getitem__(self, index):
         row = self._sequences.iloc[index]
@@ -98,7 +108,8 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
                 events=self._events,
                 series_id=row.name,
                 start=start,
-                sequence_length=self._sequence_length
+                sequence_length=self._sequence_length,
+                event_width=self._event_width
             )
         else:
             label = None
@@ -108,36 +119,33 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         data['timestamp'] = data['timestamp'].apply(
             lambda x: datetime.datetime.strptime(x, '%Y-%m-%dT%H:%M:%S%z'))
 
+        hour = data['timestamp'].apply(lambda x: x.hour)
+
+        # https://ianlondon.github.io/blog/encoding-cyclical-features-24hour-time/
+        hour_sin = np.sin(2 * np.pi * hour / 24)
+        hour_cos = np.cos(2 * np.pi * hour / 24)
+
         sequence = np.stack([
-            data['anglez'],
-            data['enmo']
+            (data['anglez'] - ANGLEZ_MEAN) / ANGLEZ_STD,
+            (data['enmo'] - ENMO_MEAN) / ENMO_STD,
+            hour_sin.values,
+            hour_cos.values
         ])
 
         sequence_length = sequence.shape[1]
 
-        hour = data['timestamp'].apply(lambda x: x.hour).values
         if sequence_length < self._sequence_length:
             sequence = np.pad(
                 sequence,
                 pad_width=((0, 0), (0, self._sequence_length - sequence_length))
             )
-            hour = np.pad(
-                hour,
-                pad_width=(0, self._sequence_length - data.shape[0]),
-                constant_values=hour[-1]
-            )
-
-        sequence = self._transform(image=sequence)['image']
-
-        sequence = sequence.squeeze(dim=0)
 
         data = {
             'sequence': sequence,
             'start': start,
             'end': start + self._sequence_length,
             'sequence_length': sequence_length,
-            'series_id': row.name,
-            'hour': hour
+            'series_id': row.name
         }
 
         if label is None:
@@ -157,7 +165,9 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
         events: pd.DataFrame,
         series_id: str,
         sequence_length: int,
-        start: int
+        start: int,
+        event_width: int = 360,
+        event_sigma: int = 10
     ):
         events = events.loc[[series_id]]
 
@@ -166,24 +176,28 @@ class ClassifySegmentDataset(torch.utils.data.Dataset):
              (events['start'] <= start + sequence_length)) |
             (events['start'] <= start) &
             (events['end'] >= start)]
-        label = torch.zeros((sequence_length, len(Label)),
-                            dtype=torch.long)
+        label = torch.zeros((sequence_length, 3),
+                            dtype=torch.float)
         for event in events.itertuples():
+            if event.event != Label.sleep.name:
+                continue
+
             event_start = int(max(start, event.start))
             event_end = int(min(start + sequence_length, event.end))
 
-            if event.event in (Label.onset.name, Label.wakeup.name):
-                event_start = max(0, int(event_start - start) - 360)
-                event_end = int(event_end - start) + 360
-            else:
-                event_start = int(event_start - start)
-                event_end = int(event_end - start)
+            event_start = max(0, int(event_start - start))
+            event_end = int(event_end - start)
 
-            label[event_start:event_end,
-            getattr(Label, event.event).value] = 1
+            label[event_start:event_end+1, 0] = 1
+            label[event_start, 1] = 1
+            label[event_end, 2] = 1
 
-        label[torch.where(label[:, Label.onset.value] == 1)[0], :3] = 0
-        label[torch.where(label[:, Label.wakeup.value] == 1)[0], :3] = 0
+        label[:, [1, 2]] = torch.tensor(
+            _gaussian_label(
+                label=label[:, [1, 2]].cpu().numpy(),
+                offset=event_width,
+                sigma=event_sigma
+            ))
 
         return label
 
@@ -198,3 +212,19 @@ def is_valid_sequence(seq_meta: pd.Series, sequence_length: int):
             is_valid = False
 
     return is_valid
+
+
+# ref: https://www.kaggle.com/competitions/dfl-bundesliga-data-shootout/discussion/360236#2004730
+def _gaussian_kernel(length: int, sigma: int = 3) -> np.ndarray:
+    x = np.ogrid[-length : length + 1]
+    h = np.exp(-(x**2) / (2 * sigma * sigma))  # type: ignore
+    h[h < np.finfo(h.dtype).eps * h.max()] = 0
+    return h
+
+
+def _gaussian_label(label: np.ndarray, offset: int, sigma: int) -> np.ndarray:
+    num_events = label.shape[1]
+    for i in range(num_events):
+        label[:, i] = np.convolve(label[:, i], _gaussian_kernel(offset, sigma), mode="same")
+
+    return label
